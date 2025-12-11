@@ -478,10 +478,10 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">187</span>    <span class="n">var_smpl_joints_scale</span> <span class="o">=</span> <span class="n">SmplJointsScaleVarG1</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">timesteps</span><span class="p">))</span>
 <span class="linenos">188</span>    <span class="n">var_offset</span> <span class="o">=</span> <span class="n">OffsetVar</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">timesteps</span><span class="p">))</span>
 <span class="linenos">189</span>
-<span class="linenos">190</span>    <span class="c1"># Costs and constraints.</span>
+<span class="linenos">190</span>    <span class="c1"># Costs.</span>
 <span class="linenos">191</span>    <span class="n">costs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="linenos">192</span>
-<span class="linenos">193</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">193</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">194</span>    <span class="k">def</span><span class="w"> </span><span class="nf">retargeting_cost</span><span class="p">(</span>
 <span class="linenos">195</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">196</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -537,7 +537,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">246</span>        <span class="p">)</span>
 <span class="linenos">247</span>        <span class="k">return</span> <span class="n">residual</span>
 <span class="linenos">248</span>
-<span class="linenos">249</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">249</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">250</span>    <span class="k">def</span><span class="w"> </span><span class="nf">scale_regularization</span><span class="p">(</span>
 <span class="linenos">251</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">252</span>        <span class="n">var_smpl_joints_scale</span><span class="p">:</span> <span class="n">SmplJointsScaleVarG1</span><span class="p">,</span>
@@ -553,7 +553,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">262</span>        <span class="n">res_2</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="o">-</span><span class="n">var_values</span><span class="p">[</span><span class="n">var_smpl_joints_scale</span><span class="p">],</span> <span class="nb">min</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">*</span> <span class="mf">100.0</span>
 <span class="linenos">263</span>        <span class="k">return</span> <span class="n">jnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">res_0</span><span class="p">,</span> <span class="n">res_1</span><span class="p">,</span> <span class="n">res_2</span><span class="p">])</span>
 <span class="linenos">264</span>
-<span class="linenos">265</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">265</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">266</span>    <span class="k">def</span><span class="w"> </span><span class="nf">pc_alignment_cost</span><span class="p">(</span>
 <span class="linenos">267</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">268</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -569,7 +569,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">278</span>        <span class="n">keypoint_pos</span> <span class="o">=</span> <span class="n">keypoints</span><span class="p">[</span><span class="n">smpl_joint_retarget_indices</span><span class="p">]</span>
 <span class="linenos">279</span>        <span class="k">return</span> <span class="p">(</span><span class="n">link_pos</span> <span class="o">-</span> <span class="n">keypoint_pos</span><span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">*</span> <span class="n">weights</span><span class="p">[</span><span class="s2">&quot;global_alignment&quot;</span><span class="p">]</span>
 <span class="linenos">280</span>
-<span class="linenos">281</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">281</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">282</span>    <span class="k">def</span><span class="w"> </span><span class="nf">floor_contact_cost</span><span class="p">(</span>
 <span class="linenos">283</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">284</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -633,7 +633,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">342</span>            <span class="o">*</span> <span class="n">weights</span><span class="p">[</span><span class="s2">&quot;floor_contact&quot;</span><span class="p">]</span>
 <span class="linenos">343</span>        <span class="p">)</span>
 <span class="linenos">344</span>
-<span class="linenos">345</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">345</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">346</span>    <span class="k">def</span><span class="w"> </span><span class="nf">root_smoothness</span><span class="p">(</span>
 <span class="linenos">347</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">348</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -644,7 +644,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">353</span>            <span class="n">var_values</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span><span class="o">.</span><span class="n">inverse</span><span class="p">()</span> <span class="o">@</span> <span class="n">var_values</span><span class="p">[</span><span class="n">var_Ts_world_root_prev</span><span class="p">]</span>
 <span class="linenos">354</span>        <span class="p">)</span><span class="o">.</span><span class="n">log</span><span class="p">()</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">*</span> <span class="n">weights</span><span class="p">[</span><span class="s2">&quot;root_smoothness&quot;</span><span class="p">]</span>
 <span class="linenos">355</span>
-<span class="linenos">356</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">356</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">357</span>    <span class="k">def</span><span class="w"> </span><span class="nf">skating_cost</span><span class="p">(</span>
 <span class="linenos">358</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">359</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -682,7 +682,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">391</span>            <span class="n">jnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">skating_cost_left</span><span class="p">,</span> <span class="n">skating_cost_right</span><span class="p">])</span> <span class="o">*</span> <span class="n">weights</span><span class="p">[</span><span class="s2">&quot;foot_skating&quot;</span><span class="p">]</span>
 <span class="linenos">392</span>        <span class="p">)</span>
 <span class="linenos">393</span>
-<span class="linenos">394</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">factory</span>
+<span class="linenos">394</span>    <span class="nd">@jaxls</span><span class="o">.</span><span class="n">Cost</span><span class="o">.</span><span class="n">create_factory</span>
 <span class="linenos">395</span>    <span class="k">def</span><span class="w"> </span><span class="nf">world_collision_cost</span><span class="p">(</span>
 <span class="linenos">396</span>        <span class="n">var_values</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">VarValues</span><span class="p">,</span>
 <span class="linenos">397</span>        <span class="n">var_Ts_world_root</span><span class="p">:</span> <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">,</span>
@@ -715,91 +715,81 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">424</span>            <span class="n">target_keypoints</span><span class="p">,</span>
 <span class="linenos">425</span>        <span class="p">),</span>
 <span class="linenos">426</span>        <span class="n">scale_regularization</span><span class="p">(</span><span class="n">var_smpl_joints_scale</span><span class="p">),</span>
-<span class="linenos">427</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">smoothness_cost</span><span class="p">(</span>
-<span class="linenos">428</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
-<span class="linenos">429</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
-<span class="linenos">430</span>            <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.2</span><span class="p">]),</span>
+<span class="linenos">427</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">limit_cost</span><span class="p">(</span>
+<span class="linenos">428</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot</span><span class="p">),</span>
+<span class="linenos">429</span>            <span class="n">var_joints</span><span class="p">,</span>
+<span class="linenos">430</span>            <span class="mf">100.0</span><span class="p">,</span>
 <span class="linenos">431</span>        <span class="p">),</span>
-<span class="linenos">432</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">rest_cost</span><span class="p">(</span>
-<span class="linenos">433</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">434</span>            <span class="n">var_joints</span><span class="o">.</span><span class="n">default_factory</span><span class="p">()[</span><span class="kc">None</span><span class="p">],</span>
-<span class="linenos">435</span>            <span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">var_joints</span><span class="o">.</span><span class="n">default_factory</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span>
-<span class="linenos">436</span>            <span class="o">.</span><span class="n">at</span><span class="p">[</span><span class="n">joints_to_move_less</span><span class="p">]</span>
-<span class="linenos">437</span>            <span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)[</span><span class="kc">None</span><span class="p">],</span>
-<span class="linenos">438</span>        <span class="p">),</span>
-<span class="linenos">439</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">self_collision_cost</span><span class="p">(</span>
-<span class="linenos">440</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot</span><span class="p">),</span>
-<span class="linenos">441</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot_coll</span><span class="p">),</span>
-<span class="linenos">442</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">443</span>            <span class="n">margin</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
-<span class="linenos">444</span>            <span class="n">weight</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>
-<span class="linenos">445</span>        <span class="p">),</span>
-<span class="linenos">446</span>        <span class="c1"># Costs that are scene-centric.</span>
-<span class="linenos">447</span>        <span class="n">pc_alignment_cost</span><span class="p">(</span>
-<span class="linenos">448</span>            <span class="n">var_Ts_world_root</span><span class="p">,</span>
-<span class="linenos">449</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">450</span>            <span class="n">target_keypoints</span><span class="p">,</span>
-<span class="linenos">451</span>        <span class="p">),</span>
-<span class="linenos">452</span>        <span class="n">floor_contact_cost</span><span class="p">(</span>
+<span class="linenos">432</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">smoothness_cost</span><span class="p">(</span>
+<span class="linenos">433</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
+<span class="linenos">434</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
+<span class="linenos">435</span>            <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">0.2</span><span class="p">]),</span>
+<span class="linenos">436</span>        <span class="p">),</span>
+<span class="linenos">437</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">rest_cost</span><span class="p">(</span>
+<span class="linenos">438</span>            <span class="n">var_joints</span><span class="p">,</span>
+<span class="linenos">439</span>            <span class="n">var_joints</span><span class="o">.</span><span class="n">default_factory</span><span class="p">()[</span><span class="kc">None</span><span class="p">],</span>
+<span class="linenos">440</span>            <span class="n">jnp</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">var_joints</span><span class="o">.</span><span class="n">default_factory</span><span class="p">()</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">)</span>
+<span class="linenos">441</span>            <span class="o">.</span><span class="n">at</span><span class="p">[</span><span class="n">joints_to_move_less</span><span class="p">]</span>
+<span class="linenos">442</span>            <span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mf">2.0</span><span class="p">)[</span><span class="kc">None</span><span class="p">],</span>
+<span class="linenos">443</span>        <span class="p">),</span>
+<span class="linenos">444</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">self_collision_cost</span><span class="p">(</span>
+<span class="linenos">445</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot</span><span class="p">),</span>
+<span class="linenos">446</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot_coll</span><span class="p">),</span>
+<span class="linenos">447</span>            <span class="n">var_joints</span><span class="p">,</span>
+<span class="linenos">448</span>            <span class="n">margin</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
+<span class="linenos">449</span>            <span class="n">weight</span><span class="o">=</span><span class="mf">2.0</span><span class="p">,</span>
+<span class="linenos">450</span>        <span class="p">),</span>
+<span class="linenos">451</span>        <span class="c1"># Costs that are scene-centric.</span>
+<span class="linenos">452</span>        <span class="n">pc_alignment_cost</span><span class="p">(</span>
 <span class="linenos">453</span>            <span class="n">var_Ts_world_root</span><span class="p">,</span>
 <span class="linenos">454</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">455</span>            <span class="n">var_offset</span><span class="p">,</span>
-<span class="linenos">456</span>            <span class="n">is_left_foot_contact</span><span class="p">,</span>
-<span class="linenos">457</span>            <span class="n">is_right_foot_contact</span><span class="p">,</span>
-<span class="linenos">458</span>            <span class="n">left_foot_keypoints</span><span class="p">,</span>
-<span class="linenos">459</span>            <span class="n">right_foot_keypoints</span><span class="p">,</span>
-<span class="linenos">460</span>        <span class="p">),</span>
-<span class="linenos">461</span>        <span class="n">root_smoothness</span><span class="p">(</span>
-<span class="linenos">462</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
-<span class="linenos">463</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
-<span class="linenos">464</span>        <span class="p">),</span>
-<span class="linenos">465</span>        <span class="n">skating_cost</span><span class="p">(</span>
-<span class="linenos">466</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
-<span class="linenos">467</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
-<span class="linenos">468</span>            <span class="n">OffsetVar</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
-<span class="linenos">469</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
-<span class="linenos">470</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
-<span class="linenos">471</span>            <span class="n">OffsetVar</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
-<span class="linenos">472</span>            <span class="n">is_left_foot_contact</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-<span class="linenos">473</span>            <span class="n">is_right_foot_contact</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
-<span class="linenos">474</span>        <span class="p">),</span>
-<span class="linenos">475</span>        <span class="n">world_collision_cost</span><span class="p">(</span>
-<span class="linenos">476</span>            <span class="n">var_Ts_world_root</span><span class="p">,</span>
-<span class="linenos">477</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">478</span>            <span class="n">var_offset</span><span class="p">,</span>
+<span class="linenos">455</span>            <span class="n">target_keypoints</span><span class="p">,</span>
+<span class="linenos">456</span>        <span class="p">),</span>
+<span class="linenos">457</span>        <span class="n">floor_contact_cost</span><span class="p">(</span>
+<span class="linenos">458</span>            <span class="n">var_Ts_world_root</span><span class="p">,</span>
+<span class="linenos">459</span>            <span class="n">var_joints</span><span class="p">,</span>
+<span class="linenos">460</span>            <span class="n">var_offset</span><span class="p">,</span>
+<span class="linenos">461</span>            <span class="n">is_left_foot_contact</span><span class="p">,</span>
+<span class="linenos">462</span>            <span class="n">is_right_foot_contact</span><span class="p">,</span>
+<span class="linenos">463</span>            <span class="n">left_foot_keypoints</span><span class="p">,</span>
+<span class="linenos">464</span>            <span class="n">right_foot_keypoints</span><span class="p">,</span>
+<span class="linenos">465</span>        <span class="p">),</span>
+<span class="linenos">466</span>        <span class="n">root_smoothness</span><span class="p">(</span>
+<span class="linenos">467</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
+<span class="linenos">468</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
+<span class="linenos">469</span>        <span class="p">),</span>
+<span class="linenos">470</span>        <span class="n">skating_cost</span><span class="p">(</span>
+<span class="linenos">471</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
+<span class="linenos">472</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
+<span class="linenos">473</span>            <span class="n">OffsetVar</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">timesteps</span><span class="p">)),</span>
+<span class="linenos">474</span>            <span class="n">jaxls</span><span class="o">.</span><span class="n">SE3Var</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
+<span class="linenos">475</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joint_var_cls</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
+<span class="linenos">476</span>            <span class="n">OffsetVar</span><span class="p">(</span><span class="n">jnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">timesteps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)),</span>
+<span class="linenos">477</span>            <span class="n">is_left_foot_contact</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
+<span class="linenos">478</span>            <span class="n">is_right_foot_contact</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span>
 <span class="linenos">479</span>        <span class="p">),</span>
-<span class="linenos">480</span>    <span class="p">]</span>
-<span class="linenos">481</span>
-<span class="linenos">482</span>    <span class="n">costs</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-<span class="linenos">483</span>        <span class="n">pk</span><span class="o">.</span><span class="n">costs</span><span class="o">.</span><span class="n">limit_constraint</span><span class="p">(</span>
-<span class="linenos">484</span>            <span class="n">jax</span><span class="o">.</span><span class="n">tree</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">x</span><span class="p">[</span><span class="kc">None</span><span class="p">],</span> <span class="n">robot</span><span class="p">),</span>
-<span class="linenos">485</span>            <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">486</span>        <span class="p">),</span>
-<span class="linenos">487</span>    <span class="p">)</span>
-<span class="linenos">488</span>
-<span class="linenos">489</span>    <span class="n">solution</span> <span class="o">=</span> <span class="p">(</span>
-<span class="linenos">490</span>        <span class="n">jaxls</span><span class="o">.</span><span class="n">LeastSquaresProblem</span><span class="p">(</span>
-<span class="linenos">491</span>            <span class="n">costs</span><span class="o">=</span><span class="n">costs</span><span class="p">,</span>
-<span class="linenos">492</span>            <span class="n">variables</span><span class="o">=</span><span class="p">[</span>
-<span class="linenos">493</span>                <span class="n">var_joints</span><span class="p">,</span>
-<span class="linenos">494</span>                <span class="n">var_Ts_world_root</span><span class="p">,</span>
-<span class="linenos">495</span>                <span class="n">var_smpl_joints_scale</span><span class="p">,</span>
-<span class="linenos">496</span>                <span class="n">var_offset</span><span class="p">,</span>
-<span class="linenos">497</span>            <span class="p">],</span>
-<span class="linenos">498</span>        <span class="p">)</span>
-<span class="linenos">499</span>        <span class="o">.</span><span class="n">analyze</span><span class="p">()</span>
-<span class="linenos">500</span>        <span class="o">.</span><span class="n">solve</span><span class="p">(</span>
-<span class="linenos">501</span>            <span class="n">augmented_lagrangian</span><span class="o">=</span><span class="n">jaxls</span><span class="o">.</span><span class="n">AugmentedLagrangianConfig</span><span class="p">(</span><span class="n">max_iterations</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
-<span class="linenos">502</span>        <span class="p">)</span>
-<span class="linenos">503</span>    <span class="p">)</span>
-<span class="linenos">504</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
-<span class="linenos">505</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
-<span class="linenos">506</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
-<span class="linenos">507</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
-<span class="linenos">508</span>
-<span class="linenos">509</span>
-<span class="linenos">510</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-<span class="linenos">511</span>    <span class="n">main</span><span class="p">()</span>
+<span class="linenos">480</span>        <span class="n">world_collision_cost</span><span class="p">(</span>
+<span class="linenos">481</span>            <span class="n">var_Ts_world_root</span><span class="p">,</span>
+<span class="linenos">482</span>            <span class="n">var_joints</span><span class="p">,</span>
+<span class="linenos">483</span>            <span class="n">var_offset</span><span class="p">,</span>
+<span class="linenos">484</span>        <span class="p">),</span>
+<span class="linenos">485</span>    <span class="p">]</span>
+<span class="linenos">486</span>
+<span class="linenos">487</span>    <span class="n">solution</span> <span class="o">=</span> <span class="p">(</span>
+<span class="linenos">488</span>        <span class="n">jaxls</span><span class="o">.</span><span class="n">LeastSquaresProblem</span><span class="p">(</span>
+<span class="linenos">489</span>            <span class="n">costs</span><span class="p">,</span> <span class="p">[</span><span class="n">var_joints</span><span class="p">,</span> <span class="n">var_Ts_world_root</span><span class="p">,</span> <span class="n">var_smpl_joints_scale</span><span class="p">,</span> <span class="n">var_offset</span><span class="p">]</span>
+<span class="linenos">490</span>        <span class="p">)</span>
+<span class="linenos">491</span>        <span class="o">.</span><span class="n">analyze</span><span class="p">()</span>
+<span class="linenos">492</span>        <span class="o">.</span><span class="n">solve</span><span class="p">()</span>
+<span class="linenos">493</span>    <span class="p">)</span>
+<span class="linenos">494</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
+<span class="linenos">495</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
+<span class="linenos">496</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
+<span class="linenos">497</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
+<span class="linenos">498</span>
+<span class="linenos">499</span>
+<span class="linenos">500</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<span class="linenos">501</span>    <span class="n">main</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>

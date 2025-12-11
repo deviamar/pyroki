@@ -301,7 +301,7 @@
 <li><p>Differentiable collision bodies with numpy broadcasting logic.</p></li>
 <li><p>Common cost factors (e.g., end effector pose, self/world-collision, manipulability).</p></li>
 <li><p>Arbitrary costs, getting Jacobians either calculated <a class="reference internal" href="misc/writing_manual_jac/"><span class="doc">through autodiff or defined manually</span></a>.</p></li>
-<li><p>Integration with a <a class="reference external" href="https://github.com/brentyi/jaxls">Levenberg-Marquardt Solver</a> that supports optimization on manifolds (e.g., <a class="reference external" href="https://github.com/brentyi/jaxlie">lie groups</a>) and hard constraints via an Augmented Lagrangian solver.</p></li>
+<li><p>Integration with a <a class="reference external" href="https://github.com/brentyi/jaxls">Levenberg-Marquardt Solver</a> that supports optimization on manifolds (e.g., <a class="reference external" href="https://github.com/brentyi/jaxlie">lie groups</a>).</p></li>
 <li><p>Cross-platform support (CPU, GPU, TPU) via JAX.</p></li>
 </ul>
 <section id="installation">
@@ -317,6 +317,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <section id="limitations">
 <h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
 <ul class="simple">
+<li><p><strong>Soft constraints only</strong>: We use a nonlinear least-squares formulation and model joint limits, collision avoidance, etc. as soft penalties with high weights rather than hard constraints.</p></li>
 <li><p><strong>Static shapes &amp; JIT overhead</strong>: JAX JIT compilation is triggered on first run and when input shapes change (e.g., number of targets, obstacles). Arrays can be pre-padded to vectorize over inputs with different shapes.</p></li>
 <li><p><strong>No sampling-based planners</strong>: We don’t include sampling-based planners (e.g., graphs, trees).</p></li>
 <li><p><strong>Collision performance</strong>: Speed and accuracy comparisons against other robot toolkits such as CuRobo have not been extensively performed, and is likely slower than other toolkits for collision-heavy scenarios.</p></li>
