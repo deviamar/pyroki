@@ -42,6 +42,14 @@ dev = [
     "m2r2",
 ]
 
+ballpark = [
+    "ballpark @ git+https://github.com/chungmin99/ballpark.git",
+]
+
+examples = [
+    "ballpark @ git+https://github.com/chungmin99/ballpark.git",
+]
+
 [tool.ruff.lint]
 select = [
     "E",  # pycodestyle errors.

@@ -79,6 +79,34 @@ def sphere_sphere(sphere1: Sphere, sphere2: Sphere) -> Float[Array, "*batch"]:
     return dist
 
 
+def sphere_sphere_with_jac(
+    pos1: Float[Array, "*batch 3"],
+    radius1: Float[Array, "*batch"],
+    pos2: Float[Array, "*batch 3"],
+    radius2: Float[Array, "*batch"],
+) -> tuple[
+    Float[Array, "*batch"],
+    Float[Array, "*batch 3"],
+    Float[Array, "*batch 3"],
+]:
+    """Sphere-sphere distance with analytic Jacobians w.r.t. positions.
+
+    Returns:
+        distance: Signed distance (negative = penetration)
+        jac_pos1: ∂distance/∂pos1 = -direction
+        jac_pos2: ∂distance/∂pos2 = +direction
+    """
+    diff = pos2 - pos1
+    direction, dist_center = _utils.normalize_with_norm(diff)
+
+    distance = dist_center - (radius1 + radius2)
+
+    jac_pos1 = -direction
+    jac_pos2 = direction
+
+    return distance, jac_pos1, jac_pos2
+
+
 def sphere_capsule(sphere: Sphere, capsule: Capsule) -> Float[Array, "*batch"]:
     """Calculate distance between sphere and capsule."""
     cap_pos = capsule.pose.translation()

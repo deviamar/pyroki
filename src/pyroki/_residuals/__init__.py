@@ -13,6 +13,12 @@ from ._pose_residual_analytic_jac import (
 from ._pose_residual_numerical_jac import (
     pose_cost_numerical_jac as pose_cost_numerical_jac,
 )
+from ._sphere_self_collision_analytic_jac import (
+    sphere_self_collision_cost_analytic_jac as sphere_self_collision_cost_analytic_jac,
+)
+from ._sphere_world_collision_analytic_jac import (
+    sphere_world_collision_cost_analytic_jac as sphere_world_collision_cost_analytic_jac,
+)
 from ._residuals import (
     five_point_acceleration_residual as five_point_acceleration_residual,
 )
@@ -29,4 +35,8 @@ from ._residuals import rest_residual as rest_residual
 from ._residuals import rest_with_base_residual as rest_with_base_residual
 from ._residuals import self_collision_residual as self_collision_residual
 from ._residuals import smoothness_residual as smoothness_residual
+from ._residuals import sphere_self_collision_residual as sphere_self_collision_residual
+from ._residuals import (
+    sphere_world_collision_residual as sphere_world_collision_residual,
+)
 from ._residuals import world_collision_residual as world_collision_residual

@@ -14,7 +14,13 @@ from jax import Array
 from jaxls import Var, VarValues
 
 from .._robot import Robot
-from ..collision import CollGeom, RobotCollision, colldist_from_sdf
+from ..collision import (
+    CollGeom,
+    RobotCollision,
+    RobotSphereCollision,
+    Sphere,
+    colldist_from_sdf,
+)
 
 
 # --- Pose Residuals ---
@@ -345,4 +351,55 @@ def limit_jerk_residual(
         8 * dt**3
     )
     residual = jnp.maximum(0.0, jnp.abs(jerk) - jerk_limit)
+    return (residual * weight).flatten()
+
+
+# --- Sphere Collision Residuals ---
+
+
+def sphere_self_collision_residual(
+    vals: VarValues,
+    robot: Robot,
+    robot_coll: RobotSphereCollision,
+    joint_var: Var[Array],
+    margin: float,
+    weight: Array | float = 1.0,
+) -> Array:
+    """Computes sphere-based self-collision residual.
+
+    Uses max(0, margin - distance) for all valid sphere pairs.
+    Uses flat sphere-pair indexing for efficiency - no (P, S, S) expansion.
+    Residual > 0 indicates collision or within margin.
+    """
+    cfg = vals[joint_var]
+    # Use flat distance computation - no validity masking needed
+    distances, _ = robot_coll.compute_self_collision_distances_flat(robot, cfg)
+
+    residual = jnp.maximum(0.0, margin - distances)
+
+    return (residual * weight).flatten()
+
+
+def sphere_world_collision_residual(
+    vals: VarValues,
+    robot: Robot,
+    robot_coll: RobotSphereCollision,
+    joint_var: Var[Array],
+    world_spheres: Sphere,
+    margin: float,
+    weight: Array | float = 1.0,
+) -> Array:
+    """Computes sphere-based world collision residual.
+
+    Uses max(0, margin - distance) for all valid sphere pairs.
+    Residual > 0 indicates collision or within margin.
+    """
+    cfg = vals[joint_var]
+    distances, valid_mask = robot_coll.compute_all_world_collision_distances(
+        robot, cfg, world_spheres
+    )
+
+    residual = jnp.maximum(0.0, margin - distances)
+    residual = jnp.where(valid_mask[..., None], residual, 0.0)
+
     return (residual * weight).flatten()
