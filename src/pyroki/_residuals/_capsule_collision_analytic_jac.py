@@ -18,10 +18,11 @@ import jax.numpy as jnp
 import jaxlie
 import jaxls
 
-from ._sphere_self_collision_analytic_jac import (
-    _compute_all_link_position_jacobians,
-    _compute_link_position_jacobians_sparse,
-    _get_joints_applied_to_all_links,
+from ._collision_jac_helpers import (
+    compute_all_link_position_jacobians,
+    compute_link_position_jacobians_sparse,
+    get_joints_applied_to_all_links,
+    prepare_sparse_link_indices,
 )
 from ..collision._utils import closest_segment_to_segment_with_jac
 
@@ -91,7 +92,7 @@ def _compute_all_link_endpoint_jacobians(
     endpoints_stacked = jnp.stack([capsule_endpoints_a, capsule_endpoints_b], axis=1)
 
     # Compute Jacobians for both endpoints in a single call
-    jac_both = _compute_all_link_position_jacobians(
+    jac_both = compute_all_link_position_jacobians(
         robot, Ts_world_joint, endpoints_stacked, joints_applied_to_links
     )  # (num_links, 2, 3, num_actuated)
 
@@ -126,7 +127,7 @@ def _compute_link_endpoint_jacobians_sparse(
     endpoints_stacked = jnp.stack([capsule_endpoints_a, capsule_endpoints_b], axis=1)
 
     # Compute Jacobians for both endpoints in a single call
-    jac_both = _compute_link_position_jacobians_sparse(
+    jac_both = compute_link_position_jacobians_sparse(
         robot, Ts_world_joint, endpoints_stacked, joints_applied_to_links, unique_links
     )  # (num_unique_links, 2, 3, num_actuated)
 
@@ -160,27 +161,8 @@ def capsule_self_collision_cost_analytic_jac(
     Returns:
         jaxls.Cost with analytic Jacobian.
     """
-    # Precompute which joints affect each link (done once, outside cost function)
-    all_joints_applied = _get_joints_applied_to_all_links(robot)
-
-    # Compute unique links involved in active collision pairs
-    # Try to extract concrete values; fall back to all links if being traced
-    try:
-        active_i_list = [int(x) for x in robot_coll.geom_pair_link_i]
-        active_j_list = [int(x) for x in robot_coll.geom_pair_link_j]
-        unique_links_set = sorted(set(active_i_list) | set(active_j_list))
-        unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
-    except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError):
-        # Fall back to all links when being traced (inside JIT)
-        unique_links = jnp.arange(robot.links.num_links, dtype=jnp.int32)
-
-    # Create sparse joints_applied array for only unique links
-    joints_applied_to_links = all_joints_applied[unique_links]
-
-    # Create reverse mapping: original link index -> sparse index
-    link_to_sparse_idx = jnp.full(robot.links.num_links, -1, dtype=jnp.int32)
-    link_to_sparse_idx = link_to_sparse_idx.at[unique_links].set(
-        jnp.arange(len(unique_links), dtype=jnp.int32)
+    joints_applied, unique_links, link_to_sparse = prepare_sparse_link_indices(
+        robot, robot_coll.geom_pair_link_i, robot_coll.geom_pair_link_j
     )
 
     return _capsule_self_collision_cost(
@@ -189,9 +171,9 @@ def capsule_self_collision_cost_analytic_jac(
         joint_var,
         margin,
         weight,
-        joints_applied_to_links,
+        joints_applied,
         unique_links,
-        link_to_sparse_idx,
+        link_to_sparse,
     )
 
 
@@ -218,27 +200,8 @@ def capsule_self_collision_constraint_analytic_jac(
     Returns:
         jaxls.Cost (constraint) with analytic Jacobian.
     """
-    # Precompute which joints affect each link (done once, outside cost function)
-    all_joints_applied = _get_joints_applied_to_all_links(robot)
-
-    # Compute unique links involved in active collision pairs
-    # Try to extract concrete values; fall back to all links if being traced
-    try:
-        active_i_list = [int(x) for x in robot_coll.geom_pair_link_i]
-        active_j_list = [int(x) for x in robot_coll.geom_pair_link_j]
-        unique_links_set = sorted(set(active_i_list) | set(active_j_list))
-        unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
-    except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError):
-        # Fall back to all links when being traced (inside JIT)
-        unique_links = jnp.arange(robot.links.num_links, dtype=jnp.int32)
-
-    # Create sparse joints_applied array for only unique links
-    joints_applied_to_links = all_joints_applied[unique_links]
-
-    # Create reverse mapping: original link index -> sparse index
-    link_to_sparse_idx = jnp.full(robot.links.num_links, -1, dtype=jnp.int32)
-    link_to_sparse_idx = link_to_sparse_idx.at[unique_links].set(
-        jnp.arange(len(unique_links), dtype=jnp.int32)
+    joints_applied, unique_links, link_to_sparse = prepare_sparse_link_indices(
+        robot, robot_coll.geom_pair_link_i, robot_coll.geom_pair_link_j
     )
 
     return _capsule_self_collision_constraint(
@@ -247,9 +210,9 @@ def capsule_self_collision_constraint_analytic_jac(
         joint_var,
         margin,
         weight,
-        joints_applied_to_links,
+        joints_applied,
         unique_links,
-        link_to_sparse_idx,
+        link_to_sparse,
     )
 
 
@@ -476,7 +439,7 @@ def capsule_world_collision_cost_analytic_jac(
     Returns:
         jaxls.Cost with analytic Jacobian.
     """
-    joints_applied_to_links = _get_joints_applied_to_all_links(robot)
+    joints_applied_to_links = get_joints_applied_to_all_links(robot)
 
     return _capsule_world_collision_cost(
         robot,
@@ -513,7 +476,7 @@ def capsule_world_collision_constraint_analytic_jac(
     Returns:
         jaxls.Cost (constraint) with analytic Jacobian.
     """
-    joints_applied_to_links = _get_joints_applied_to_all_links(robot)
+    joints_applied_to_links = get_joints_applied_to_all_links(robot)
 
     return _capsule_world_collision_constraint(
         robot,

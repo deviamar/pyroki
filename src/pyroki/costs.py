@@ -31,11 +31,9 @@ from ._residuals._pose_residual_analytic_jac import (
 from ._residuals._pose_residual_numerical_jac import (
     pose_cost_numerical_jac as pose_cost_numerical_jac,
 )
-from ._residuals._sphere_self_collision_analytic_jac import (
+from ._residuals._sphere_collision_analytic_jac import (
     sphere_self_collision_cost_analytic_jac as sphere_self_collision_cost_analytic_jac,
     sphere_self_collision_constraint_analytic_jac as sphere_self_collision_constraint_analytic_jac,
-)
-from ._residuals._sphere_world_collision_analytic_jac import (
     sphere_world_collision_cost_analytic_jac as sphere_world_collision_cost_analytic_jac,
     sphere_world_collision_constraint_analytic_jac as sphere_world_collision_constraint_analytic_jac,
 )

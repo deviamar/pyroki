@@ -13,10 +13,8 @@ from ._pose_residual_analytic_jac import (
 from ._pose_residual_numerical_jac import (
     pose_cost_numerical_jac as pose_cost_numerical_jac,
 )
-from ._sphere_self_collision_analytic_jac import (
+from ._sphere_collision_analytic_jac import (
     sphere_self_collision_cost_analytic_jac as sphere_self_collision_cost_analytic_jac,
-)
-from ._sphere_world_collision_analytic_jac import (
     sphere_world_collision_cost_analytic_jac as sphere_world_collision_cost_analytic_jac,
 )
 from ._residuals import (
