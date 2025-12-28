@@ -66,7 +66,7 @@ manipulability_cost = Cost.factory(manipulability_residual)
 self_collision_cost = Cost.factory(self_collision_residual)
 world_collision_cost = Cost.factory(world_collision_residual)
 
-# Sphere collision costs (using RobotSphereCollision)
+# Sphere collision costs (using RobotCollision with sphere decomposition)
 sphere_self_collision_cost = Cost.factory(sphere_self_collision_residual)
 sphere_world_collision_cost = Cost.factory(sphere_world_collision_residual)
 

@@ -80,13 +80,20 @@ def _solve_ik_coll(
 def test_unit_collision_batching():
     """Unit test: RobotCollision manual batching without full URDF."""
     # 1. Create a dummy collision object (single batch)
-    coll = Capsule.from_radius_height(jnp.array([0.1, 0.1]), jnp.array([1.0, 1.0]))
+    # Shape: (num_links=2, max_geoms_per_link=1)
+    coll = Capsule.from_radius_height(
+        jnp.array([[0.1], [0.1]]), jnp.array([[1.0], [1.0]])
+    )
     robot_coll = RobotCollision(
         num_links=2,
         link_names=("l1", "l2"),
         coll=coll,
-        active_idx_i=(0,),
-        active_idx_j=(1,),  # Static tuples
+        max_geoms_per_link=1,
+        geom_counts=jnp.array([1, 1]),
+        geom_pair_link_i=(0,),
+        geom_pair_idx_i=(0,),
+        geom_pair_link_j=(1,),
+        geom_pair_idx_j=(0,),
     )
 
     # 2. Manually broadcast to batch size 5 with variation
@@ -101,9 +108,12 @@ def test_unit_collision_batching():
     # 3. Vmap a function over it
     @jax.jit
     def compute(rc: RobotCollision):
-        idx_i, idx_j = jnp.array(rc.active_idx_i), jnp.array(rc.active_idx_j)
-        r = rc.coll.size[..., 0]  # access radius
-        return r[idx_i] + r[idx_j]
+        link_i = jnp.array(rc.geom_pair_link_i)
+        link_j = jnp.array(rc.geom_pair_link_j)
+        idx_i = jnp.array(rc.geom_pair_idx_i)
+        idx_j = jnp.array(rc.geom_pair_idx_j)
+        r = rc.coll.size[..., 0]  # access radius (num_links, max_geoms_per_link)
+        return r[link_i, idx_i] + r[link_j, idx_j]
 
     results = jax.vmap(compute)(batched_coll)
     assert results.shape == (batch_size, 1)
@@ -116,24 +126,34 @@ def test_unit_collision_batching_topology_mismatch():
     the non-batchable elements (topological properties like link structure/indices)
     are identical across the batch.
     """
-    # 1. Base collision geometry
-    coll = Capsule.from_radius_height(jnp.array([0.1, 0.1]), jnp.array([1.0, 1.0]))
+    # 1. Base collision geometry (shape: num_links=2, max_geoms_per_link=1)
+    coll = Capsule.from_radius_height(
+        jnp.array([[0.1], [0.1]]), jnp.array([[1.0], [1.0]])
+    )
 
-    # 2. Define two RobotCollision objects with DIFFERENT topologies (active_idx_j)
+    # 2. Define two RobotCollision objects with DIFFERENT topologies (geom_pair_link_j)
     # These fields are marked as jdc.Static, so they are part of the PyTree structure.
     rc1 = RobotCollision(
         num_links=2,
         link_names=("l1", "l2"),
         coll=coll,
-        active_idx_i=(0,),
-        active_idx_j=(1,),
+        max_geoms_per_link=1,
+        geom_counts=jnp.array([1, 1]),
+        geom_pair_link_i=(0,),
+        geom_pair_idx_i=(0,),
+        geom_pair_link_j=(1,),
+        geom_pair_idx_j=(0,),
     )
     rc2 = RobotCollision(
         num_links=2,
         link_names=("l1", "l2"),
         coll=coll,
-        active_idx_i=(0,),
-        active_idx_j=(0,),  # <--- Difference here
+        max_geoms_per_link=1,
+        geom_counts=jnp.array([1, 1]),
+        geom_pair_link_i=(0,),
+        geom_pair_idx_i=(0,),
+        geom_pair_link_j=(0,),  # <--- Difference here
+        geom_pair_idx_j=(0,),
     )
 
     # 3. Attempting to batch them (e.g. stack) should fail because structures differ.
@@ -170,7 +190,7 @@ def test_integration_ik_mixed_batching():
     urdf = load_robot_description("panda_description")
     robot = pk.Robot.from_urdf(urdf)
     # Ignore adjacents to ensure collision object is non-trivial but clean
-    robot_coll = RobotCollision.from_urdf(urdf, ignore_immediate_adjacents=True)
+    robot_coll = RobotCollision.from_urdf(urdf, ignore_adjacent=True)
     target_idx = robot.links.names.index("panda_hand")
 
     batch_size = 3
@@ -199,7 +219,7 @@ def test_integration_ik_fully_batched():
     """Integration: Fully batched (Robot, Collision, Targets all batched)."""
     urdf = load_robot_description("panda_description")
     robot = pk.Robot.from_urdf(urdf)
-    robot_coll = RobotCollision.from_urdf(urdf, ignore_immediate_adjacents=True)
+    robot_coll = RobotCollision.from_urdf(urdf, ignore_adjacent=True)
     target_idx = robot.links.names.index("panda_hand")
 
     batch_size = 3

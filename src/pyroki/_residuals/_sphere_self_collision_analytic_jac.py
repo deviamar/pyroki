@@ -1,10 +1,10 @@
 """Sphere self-collision cost with analytic Jacobian computation.
 
-Optimized implementation using flat sphere-pair indexing.
+Optimized implementation using flat geometry-pair indexing.
 Key optimizations:
 - Precompute ancestor relationships once outside the cost function
-- Use flat sphere-pair indices instead of (P, S, S) expansion
-- Compute per-link Jacobians, then index directly for each sphere pair
+- Use flat geometry-pair indices instead of (P, S, S) expansion
+- Compute per-link Jacobians, then index directly for each geometry pair
 - No validity masking needed - only valid pairs are in the flat index list
 """
 
@@ -20,14 +20,14 @@ import jaxls
 
 if TYPE_CHECKING:
     from .._robot import Robot
-    from ..collision import RobotSphereCollision
+    from ..collision import RobotCollision
 
-# Cache with flat sphere-pair structure
+# Cache with flat geometry-pair structure
 _SelfCollisionJacCache = tuple[
     jax.Array,  # Ts_world_joint: (num_joints, 7)
-    jax.Array,  # sphere_positions: (num_links, max_spheres, 3)
-    jax.Array,  # directions: (num_sphere_pairs, 3) - flat!
-    jax.Array,  # distances: (num_sphere_pairs,) - flat!
+    jax.Array,  # geom_positions: (num_links, max_geoms, 3)
+    jax.Array,  # directions: (num_geom_pairs, 3) - flat!
+    jax.Array,  # distances: (num_geom_pairs,) - flat!
     jax.Array,  # joints_applied_to_links: (num_unique_links, num_joints)
     jax.Array,  # unique_links: (num_unique_links,)
     jax.Array,  # link_to_sparse_idx: (num_links,)
@@ -187,7 +187,7 @@ def _sphere_self_collision_jac(
     vals: jaxls.VarValues,
     jac_cache: _SelfCollisionJacCache,
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     margin: float,
     weight: jax.Array | float,
@@ -204,7 +204,7 @@ def _sphere_self_collision_jac(
 
     (
         Ts_world_joint,
-        sphere_positions,
+        geom_positions,
         directions,
         distances,
         _,
@@ -213,20 +213,20 @@ def _sphere_self_collision_jac(
         cached_margin,
     ) = jac_cache
 
-    # 1. Compute Jacobians for spheres on unique links involved in collision
+    # 1. Compute Jacobians for geometries on unique links involved in collision
     # Cache contains all links; slice for unique ones
-    unique_sphere_pos = sphere_positions[unique_links]
+    unique_geom_pos = geom_positions[unique_links]
 
-    # Shape: (NumUniqueLinks, MaxSpheres, 3, NumActuated)
+    # Shape: (NumUniqueLinks, MaxGeoms, 3, NumActuated)
     jac_unique = _compute_link_position_jacobians_sparse(
-        robot, Ts_world_joint, unique_sphere_pos, joints_applied_to_links, unique_links
+        robot, Ts_world_joint, unique_geom_pos, joints_applied_to_links, unique_links
     )
 
     # 2. Gather Jacobians for active pairs
-    link_i = jnp.array(robot_coll.sphere_pair_link_i)
-    idx_i = jnp.array(robot_coll.sphere_pair_idx_i)
-    link_j = jnp.array(robot_coll.sphere_pair_link_j)
-    idx_j = jnp.array(robot_coll.sphere_pair_idx_j)
+    link_i = jnp.array(robot_coll.geom_pair_link_i)
+    idx_i = jnp.array(robot_coll.geom_pair_idx_i)
+    link_j = jnp.array(robot_coll.geom_pair_link_j)
+    idx_j = jnp.array(robot_coll.geom_pair_idx_j)
 
     sparse_link_i = link_to_sparse_idx[link_i]
     sparse_link_j = link_to_sparse_idx[link_j]
@@ -253,7 +253,7 @@ def _sphere_self_collision_jac(
 def _sphere_self_collision_cost_impl(
     vals: jaxls.VarValues,
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     margin: float,
     weight: jax.Array | float,
@@ -267,18 +267,18 @@ def _sphere_self_collision_cost_impl(
     Ts_world_joint = robot._forward_kinematics_joints(cfg)
     Ts_world_link = robot._link_poses_from_joint_poses(Ts_world_joint)
 
-    local_centers = robot_coll.spheres.pose.translation()
+    local_centers = robot_coll.coll.pose.translation()
     Ts_link_broadcast = jaxlie.SE3(Ts_world_link[:, None, :])
-    sphere_positions = Ts_link_broadcast.apply(local_centers)
+    geom_positions = Ts_link_broadcast.apply(local_centers)
 
     # Use flat distance computation
-    num_sphere_pairs = len(robot_coll.sphere_pair_link_i)
+    num_geom_pairs = len(robot_coll.geom_pair_link_i)
 
-    if num_sphere_pairs == 0:
+    if num_geom_pairs == 0:
         empty_residuals = jnp.zeros((0,))
         cache: _SelfCollisionJacCache = (
             Ts_world_joint,
-            sphere_positions,
+            geom_positions,
             jnp.zeros((0, 3)),  # directions
             jnp.zeros((0,)),  # distances
             joints_applied_to_links,
@@ -288,23 +288,23 @@ def _sphere_self_collision_cost_impl(
         )
         return empty_residuals, cache
 
-    # Convert flat sphere-pair indices to arrays
-    link_i = jnp.array(robot_coll.sphere_pair_link_i)
-    idx_i = jnp.array(robot_coll.sphere_pair_idx_i)
-    link_j = jnp.array(robot_coll.sphere_pair_link_j)
-    idx_j = jnp.array(robot_coll.sphere_pair_idx_j)
+    # Convert flat geometry-pair indices to arrays
+    link_i = jnp.array(robot_coll.geom_pair_link_i)
+    idx_i = jnp.array(robot_coll.geom_pair_idx_i)
+    link_j = jnp.array(robot_coll.geom_pair_link_j)
+    idx_j = jnp.array(robot_coll.geom_pair_idx_j)
 
     # Direct flat indexing - no S×S expansion
-    pos_i = sphere_positions[link_i, idx_i, :]  # (num_sphere_pairs, 3)
-    pos_j = sphere_positions[link_j, idx_j, :]  # (num_sphere_pairs, 3)
-    rad_i = robot_coll.spheres.radius[link_i, idx_i]  # (num_sphere_pairs,)
-    rad_j = robot_coll.spheres.radius[link_j, idx_j]  # (num_sphere_pairs,)
+    pos_i = geom_positions[link_i, idx_i, :]  # (num_geom_pairs, 3)
+    pos_j = geom_positions[link_j, idx_j, :]  # (num_geom_pairs, 3)
+    rad_i = robot_coll.coll.radius[link_i, idx_i]  # (num_geom_pairs,)
+    rad_j = robot_coll.coll.radius[link_j, idx_j]  # (num_geom_pairs,)
 
     # Compute distances and directions
-    diff = pos_j - pos_i  # (num_sphere_pairs, 3)
-    center_dist = jnp.linalg.norm(diff + 1e-8, axis=-1)  # (num_sphere_pairs,)
-    directions = diff / (center_dist[:, None] + 1e-8)  # (num_sphere_pairs, 3)
-    distances = center_dist - rad_i - rad_j  # (num_sphere_pairs,)
+    diff = pos_j - pos_i  # (num_geom_pairs, 3)
+    center_dist = jnp.linalg.norm(diff + 1e-8, axis=-1)  # (num_geom_pairs,)
+    directions = diff / (center_dist[:, None] + 1e-8)  # (num_geom_pairs, 3)
+    distances = center_dist - rad_i - rad_j  # (num_geom_pairs,)
 
     # Compute residuals: max(0, margin - d)
     residuals = jnp.maximum(0.0, margin - distances)
@@ -336,19 +336,19 @@ _sphere_self_collision_constraint = jaxls.Cost.factory(
 
 def sphere_self_collision_cost_analytic_jac(
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     margin: float,
     weight: jax.Array | float = 1.0,
 ) -> jaxls.Cost:
     """Create sphere self-collision cost with analytic Jacobian.
 
-    Uses flat sphere-pair indexing for efficiency - no (P, S, S) expansion.
+    Uses flat geometry-pair indexing for efficiency - no (P, S, S) expansion.
     """
     all_joints_applied = _get_joints_applied_to_all_links(robot)
 
     unique_links_set = sorted(
-        set(robot_coll.sphere_pair_link_i) | set(robot_coll.sphere_pair_link_j)
+        set(robot_coll.geom_pair_link_i) | set(robot_coll.geom_pair_link_j)
     )
     unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
 
@@ -373,20 +373,20 @@ def sphere_self_collision_cost_analytic_jac(
 
 def sphere_self_collision_constraint_analytic_jac(
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     margin: float,
     weight: jax.Array | float = 1.0,
 ) -> jaxls.Cost:
     """Create sphere self-collision constraint with analytic Jacobian.
 
-    Uses flat sphere-pair indexing for efficiency - no (P, S, S) expansion.
+    Uses flat geometry-pair indexing for efficiency - no (P, S, S) expansion.
     Constraint version uses augmented Lagrangian for enforcement.
     """
     all_joints_applied = _get_joints_applied_to_all_links(robot)
 
     unique_links_set = sorted(
-        set(robot_coll.sphere_pair_link_i) | set(robot_coll.sphere_pair_link_j)
+        set(robot_coll.geom_pair_link_i) | set(robot_coll.geom_pair_link_j)
     )
     unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
 

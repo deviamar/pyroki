@@ -17,7 +17,6 @@ from .._robot import Robot
 from ..collision import (
     CollGeom,
     RobotCollision,
-    RobotSphereCollision,
     Sphere,
     colldist_from_sdf,
 )
@@ -360,20 +359,20 @@ def limit_jerk_residual(
 def sphere_self_collision_residual(
     vals: VarValues,
     robot: Robot,
-    robot_coll: RobotSphereCollision,
+    robot_coll: RobotCollision,
     joint_var: Var[Array],
     margin: float,
     weight: Array | float = 1.0,
 ) -> Array:
     """Computes sphere-based self-collision residual.
 
-    Uses max(0, margin - distance) for all valid sphere pairs.
-    Uses flat sphere-pair indexing for efficiency - no (P, S, S) expansion.
+    Uses max(0, margin - distance) for all valid geometry pairs.
+    Uses flat geometry-pair indexing for efficiency.
     Residual > 0 indicates collision or within margin.
     """
     cfg = vals[joint_var]
-    # Use flat distance computation - no validity masking needed
-    distances, _ = robot_coll.compute_self_collision_distances_flat(robot, cfg)
+    # Use flat distance computation
+    distances, _ = robot_coll.compute_self_collision_distances_with_directions(robot, cfg)
 
     residual = jnp.maximum(0.0, margin - distances)
 
@@ -383,7 +382,7 @@ def sphere_self_collision_residual(
 def sphere_world_collision_residual(
     vals: VarValues,
     robot: Robot,
-    robot_coll: RobotSphereCollision,
+    robot_coll: RobotCollision,
     joint_var: Var[Array],
     world_spheres: Sphere,
     margin: float,
@@ -391,15 +390,13 @@ def sphere_world_collision_residual(
 ) -> Array:
     """Computes sphere-based world collision residual.
 
-    Uses max(0, margin - distance) for all valid sphere pairs.
+    Uses max(0, margin - distance) for all valid geometry-world pairs.
     Residual > 0 indicates collision or within margin.
     """
     cfg = vals[joint_var]
-    distances, valid_mask = robot_coll.compute_all_world_collision_distances(
-        robot, cfg, world_spheres
-    )
+    # Use world collision distance (returns min per link)
+    distances = robot_coll.compute_world_collision_distance(robot, cfg, world_spheres)
 
     residual = jnp.maximum(0.0, margin - distances)
-    residual = jnp.where(valid_mask[..., None], residual, 0.0)
 
     return (residual * weight).flatten()

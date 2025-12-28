@@ -150,12 +150,6 @@ def capsule_self_collision_cost_analytic_jac(
     Uses max(0, margin - distance) residual for all active collision pairs.
     Uses sparse Jacobian computation - only computes for unique links in active pairs.
 
-    Note:
-        Performance warning: Benchmarks show capsule analytic Jacobians are
-        approximately 5x slower than autodiff due to soft clamping overhead.
-        Consider using the autodiff version (capsule_self_collision_cost) unless
-        you have specific requirements for analytic Jacobians.
-
     Args:
         robot: Robot kinematic model.
         robot_coll: Robot collision model with capsules.
@@ -172,8 +166,8 @@ def capsule_self_collision_cost_analytic_jac(
     # Compute unique links involved in active collision pairs
     # Try to extract concrete values; fall back to all links if being traced
     try:
-        active_i_list = [int(x) for x in robot_coll.active_idx_i]
-        active_j_list = [int(x) for x in robot_coll.active_idx_j]
+        active_i_list = [int(x) for x in robot_coll.geom_pair_link_i]
+        active_j_list = [int(x) for x in robot_coll.geom_pair_link_j]
         unique_links_set = sorted(set(active_i_list) | set(active_j_list))
         unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
     except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError):
@@ -214,12 +208,6 @@ def capsule_self_collision_constraint_analytic_jac(
     Constraint version uses augmented Lagrangian for enforcement.
     Uses sparse Jacobian computation - only computes for unique links in active pairs.
 
-    Note:
-        Performance warning: Benchmarks show capsule analytic Jacobians are
-        approximately 5x slower than autodiff due to soft clamping overhead.
-        Consider using the autodiff version unless you have specific requirements
-        for analytic Jacobians.
-
     Args:
         robot: Robot kinematic model.
         robot_coll: Robot collision model with capsules.
@@ -236,8 +224,8 @@ def capsule_self_collision_constraint_analytic_jac(
     # Compute unique links involved in active collision pairs
     # Try to extract concrete values; fall back to all links if being traced
     try:
-        active_i_list = [int(x) for x in robot_coll.active_idx_i]
-        active_j_list = [int(x) for x in robot_coll.active_idx_j]
+        active_i_list = [int(x) for x in robot_coll.geom_pair_link_i]
+        active_j_list = [int(x) for x in robot_coll.geom_pair_link_j]
         unique_links_set = sorted(set(active_i_list) | set(active_j_list))
         unique_links = jnp.array(unique_links_set, dtype=jnp.int32)
     except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError):
@@ -311,10 +299,10 @@ def _capsule_self_collision_jac(
         cached_margin,
     ) = jac_cache
 
-    num_pairs = len(robot_coll.active_idx_i)
+    num_pairs = len(robot_coll.geom_pair_link_i)
     num_actuated = robot.joints.num_actuated_joints
-    active_i = jnp.array(robot_coll.active_idx_i)
-    active_j = jnp.array(robot_coll.active_idx_j)
+    active_i = jnp.array(robot_coll.geom_pair_link_i)
+    active_j = jnp.array(robot_coll.geom_pair_link_j)
 
     # Compute endpoint Jacobians only for unique links (sparse)
     # Slice endpoints to only include unique links (matching sphere collision pattern)
@@ -395,9 +383,9 @@ def _capsule_self_collision_cost_impl(
     capsule_endpoints_b = capsule_centers + capsule_axes * half_heights[:, None]
 
     # Get active pairs
-    active_i = jnp.array(robot_coll.active_idx_i)
-    active_j = jnp.array(robot_coll.active_idx_j)
-    num_pairs = len(robot_coll.active_idx_i)
+    active_i = jnp.array(robot_coll.geom_pair_link_i)
+    active_j = jnp.array(robot_coll.geom_pair_link_j)
+    num_pairs = len(robot_coll.geom_pair_link_i)
 
     # Get endpoints for each pair
     a1 = capsule_endpoints_a[active_i]  # (num_pairs, 3)
@@ -477,12 +465,6 @@ def capsule_world_collision_cost_analytic_jac(
 
     Uses max(0, margin - distance) residual for all link-world capsule pairs.
 
-    Note:
-        Performance warning: Benchmarks show capsule analytic Jacobians are
-        approximately 5x slower than autodiff due to soft clamping overhead.
-        Consider using the autodiff version (world_collision_cost) unless
-        you have specific requirements for analytic Jacobians.
-
     Args:
         robot: Robot kinematic model.
         robot_coll: Robot collision model with capsules.
@@ -519,12 +501,6 @@ def capsule_world_collision_constraint_analytic_jac(
 
     Uses max(0, margin - distance) residual for all link-world capsule pairs.
     Constraint version uses augmented Lagrangian for enforcement.
-
-    Note:
-        Performance warning: Benchmarks show capsule analytic Jacobians are
-        approximately 5x slower than autodiff due to soft clamping overhead.
-        Consider using the autodiff version (world_collision_constraint) unless
-        you have specific requirements for analytic Jacobians.
 
     Args:
         robot: Robot kinematic model.

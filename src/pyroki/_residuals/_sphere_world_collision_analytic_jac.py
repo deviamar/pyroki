@@ -26,7 +26,7 @@ from ._sphere_self_collision_analytic_jac import (
 
 if TYPE_CHECKING:
     from .._robot import Robot
-    from ..collision import RobotSphereCollision, Sphere
+    from ..collision import RobotCollision, Sphere
 
 # Cache now includes precomputed joints_applied_to_links
 _WorldCollisionJacCache = tuple[
@@ -42,7 +42,7 @@ _WorldCollisionJacCache = tuple[
 
 def sphere_world_collision_cost_analytic_jac(
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     world_spheres: "Sphere",
     margin: float,
@@ -68,7 +68,7 @@ def _sphere_world_collision_jac(
     vals: jaxls.VarValues,
     jac_cache: _WorldCollisionJacCache,
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     world_spheres: "Sphere",
     margin: float,
@@ -90,7 +90,7 @@ def _sphere_world_collision_jac(
     (Ts_world_joint, robot_positions, directions, distances, valid_mask, _, cached_margin) = jac_cache
 
     num_links = robot_coll.num_links
-    S = robot_coll.max_spheres_per_link
+    S = robot_coll.max_geoms_per_link
     num_world = directions.shape[2]
     num_actuated = robot.joints.num_actuated_joints
 
@@ -126,7 +126,7 @@ def _sphere_world_collision_jac(
 def _sphere_world_collision_cost_impl(
     vals: jaxls.VarValues,
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     world_spheres: "Sphere",
     margin: float,
@@ -140,7 +140,7 @@ def _sphere_world_collision_cost_impl(
     Ts_world_link = robot._link_poses_from_joint_poses(Ts_world_joint)
 
     # Get robot sphere positions in world frame
-    local_centers = robot_coll.spheres.pose.translation()
+    local_centers = robot_coll.coll.pose.translation()
     Ts_link_broadcast = jaxlie.SE3(Ts_world_link[:, None, :])
     robot_positions = Ts_link_broadcast.apply(local_centers)
 
@@ -156,8 +156,8 @@ def _sphere_world_collision_cost_impl(
     world_positions = _world_spheres.pose.translation()
     world_radii = _world_spheres.radius
 
-    robot_radii = robot_coll.spheres.radius
-    valid_mask = robot_coll._get_sphere_valid_mask()
+    robot_radii = robot_coll.coll.radius
+    valid_mask = robot_coll._get_geom_valid_mask()
 
     # Compute distances: (num_links, S, num_world)
     robot_pos_exp = robot_positions[:, :, None, :]  # (L, S, 1, 3)
@@ -200,7 +200,7 @@ _sphere_world_collision_constraint = jaxls.Cost.factory(
 
 def sphere_world_collision_constraint_analytic_jac(
     robot: "Robot",
-    robot_coll: "RobotSphereCollision",
+    robot_coll: "RobotCollision",
     joint_var: jaxls.Var[jax.Array],
     world_spheres: "Sphere",
     margin: float,
