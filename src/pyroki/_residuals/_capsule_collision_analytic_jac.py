@@ -153,14 +153,24 @@ def capsule_self_collision_cost_analytic_jac(
 
     Args:
         robot: Robot kinematic model.
-        robot_coll: Robot collision model with capsules.
+        robot_coll: Robot collision model with capsules (max_geoms_per_link == 1).
         joint_var: Variable for joint configuration.
         margin: Safety margin for collision detection.
         weight: Weight for the cost.
 
     Returns:
         jaxls.Cost with analytic Jacobian.
+
+    Raises:
+        AssertionError: If robot_coll uses sphere decomposition (max_geoms_per_link > 1).
     """
+    assert robot_coll.max_geoms_per_link == 1, (
+        f"capsule_self_collision_cost_analytic_jac requires capsule-based RobotCollision "
+        f"(max_geoms_per_link == 1), got {robot_coll.max_geoms_per_link}. "
+        f"Use RobotCollision.from_urdf() without sphere_decomposition, "
+        f"or use sphere_self_collision_cost_analytic_jac for sphere-based collision."
+    )
+
     joints_applied, unique_links, link_to_sparse = prepare_sparse_link_indices(
         robot, robot_coll.geom_pair_link_i, robot_coll.geom_pair_link_j
     )
@@ -192,14 +202,24 @@ def capsule_self_collision_constraint_analytic_jac(
 
     Args:
         robot: Robot kinematic model.
-        robot_coll: Robot collision model with capsules.
+        robot_coll: Robot collision model with capsules (max_geoms_per_link == 1).
         joint_var: Variable for joint configuration.
         margin: Safety margin for collision detection.
         weight: Weight for the constraint.
 
     Returns:
         jaxls.Cost (constraint) with analytic Jacobian.
+
+    Raises:
+        AssertionError: If robot_coll uses sphere decomposition (max_geoms_per_link > 1).
     """
+    assert robot_coll.max_geoms_per_link == 1, (
+        f"capsule_self_collision_constraint_analytic_jac requires capsule-based RobotCollision "
+        f"(max_geoms_per_link == 1), got {robot_coll.max_geoms_per_link}. "
+        f"Use RobotCollision.from_urdf() without sphere_decomposition, "
+        f"or use sphere_self_collision_constraint_analytic_jac for sphere-based collision."
+    )
+
     joints_applied, unique_links, link_to_sparse = prepare_sparse_link_indices(
         robot, robot_coll.geom_pair_link_i, robot_coll.geom_pair_link_j
     )
@@ -329,7 +349,9 @@ def _capsule_self_collision_cost_impl(
     Ts_world_link = robot._link_poses_from_joint_poses(Ts_world_joint)
 
     # Get capsule properties in world frame
-    capsule_local = robot_coll.coll  # Capsule in link frame
+    # robot_coll.coll has shape (num_links, 1), squeeze to (num_links,)
+    # Note: max_geoms_per_link == 1 is validated in the public API functions
+    capsule_local = jax.tree.map(lambda x: x[:, 0, ...], robot_coll.coll)
     Ts_link = jaxlie.SE3(Ts_world_link)
 
     # Transform capsule to world frame
@@ -430,7 +452,7 @@ def capsule_world_collision_cost_analytic_jac(
 
     Args:
         robot: Robot kinematic model.
-        robot_coll: Robot collision model with capsules.
+        robot_coll: Robot collision model with capsules (max_geoms_per_link == 1).
         joint_var: Variable for joint configuration.
         world_capsules: Static world capsule obstacles.
         margin: Safety margin for collision detection.
@@ -438,7 +460,17 @@ def capsule_world_collision_cost_analytic_jac(
 
     Returns:
         jaxls.Cost with analytic Jacobian.
+
+    Raises:
+        AssertionError: If robot_coll uses sphere decomposition (max_geoms_per_link > 1).
     """
+    assert robot_coll.max_geoms_per_link == 1, (
+        f"capsule_world_collision_cost_analytic_jac requires capsule-based RobotCollision "
+        f"(max_geoms_per_link == 1), got {robot_coll.max_geoms_per_link}. "
+        f"Use RobotCollision.from_urdf() without sphere_decomposition, "
+        f"or use sphere_world_collision_cost_analytic_jac for sphere-based collision."
+    )
+
     joints_applied_to_links = get_joints_applied_to_all_links(robot)
 
     return _capsule_world_collision_cost(
@@ -467,7 +499,7 @@ def capsule_world_collision_constraint_analytic_jac(
 
     Args:
         robot: Robot kinematic model.
-        robot_coll: Robot collision model with capsules.
+        robot_coll: Robot collision model with capsules (max_geoms_per_link == 1).
         joint_var: Variable for joint configuration.
         world_capsules: Static world capsule obstacles.
         margin: Safety margin for collision detection.
@@ -475,7 +507,17 @@ def capsule_world_collision_constraint_analytic_jac(
 
     Returns:
         jaxls.Cost (constraint) with analytic Jacobian.
+
+    Raises:
+        AssertionError: If robot_coll uses sphere decomposition (max_geoms_per_link > 1).
     """
+    assert robot_coll.max_geoms_per_link == 1, (
+        f"capsule_world_collision_constraint_analytic_jac requires capsule-based RobotCollision "
+        f"(max_geoms_per_link == 1), got {robot_coll.max_geoms_per_link}. "
+        f"Use RobotCollision.from_urdf() without sphere_decomposition, "
+        f"or use sphere_world_collision_constraint_analytic_jac for sphere-based collision."
+    )
+
     joints_applied_to_links = get_joints_applied_to_all_links(robot)
 
     return _capsule_world_collision_constraint(
@@ -579,7 +621,9 @@ def _capsule_world_collision_cost_impl(
     Ts_world_link = robot._link_poses_from_joint_poses(Ts_world_joint)
 
     # Get robot capsule properties in world frame
-    capsule_local = robot_coll.coll
+    # robot_coll.coll has shape (num_links, 1), squeeze to (num_links,)
+    # Note: max_geoms_per_link == 1 is validated in the public API functions
+    capsule_local = jax.tree.map(lambda x: x[:, 0, ...], robot_coll.coll)
     Ts_link = jaxlie.SE3(Ts_world_link)
     capsule_world = capsule_local.transform(Ts_link)
 
