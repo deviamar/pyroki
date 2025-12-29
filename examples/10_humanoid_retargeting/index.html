@@ -432,7 +432,7 @@
 <span class="linenos">142</span>    <span class="n">joints_to_move_less</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
 <span class="linenos">143</span>        <span class="p">[</span>
 <span class="linenos">144</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joints</span><span class="o">.</span><span class="n">actuated_names</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
-<span class="linenos">145</span>            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;left_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;right_hip_yaw_joint&quot;</span><span class="p">]</span>
+<span class="linenos">145</span>            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;left_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;right_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;waist_yaw_joint&quot;</span><span class="p">]</span>
 <span class="linenos">146</span>        <span class="p">]</span>
 <span class="linenos">147</span>    <span class="p">)</span>
 <span class="linenos">148</span>
@@ -569,18 +569,16 @@
 <span class="linenos">279</span>            <span class="p">],</span>
 <span class="linenos">280</span>        <span class="p">)</span>
 <span class="linenos">281</span>        <span class="o">.</span><span class="n">analyze</span><span class="p">()</span>
-<span class="linenos">282</span>        <span class="o">.</span><span class="n">solve</span><span class="p">(</span>
-<span class="linenos">283</span>            <span class="n">augmented_lagrangian</span><span class="o">=</span><span class="n">jaxls</span><span class="o">.</span><span class="n">AugmentedLagrangianConfig</span><span class="p">(</span><span class="n">max_iterations</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
-<span class="linenos">284</span>        <span class="p">)</span>
-<span class="linenos">285</span>    <span class="p">)</span>
-<span class="linenos">286</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
-<span class="linenos">287</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
-<span class="linenos">288</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
-<span class="linenos">289</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
-<span class="linenos">290</span>
-<span class="linenos">291</span>
-<span class="linenos">292</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-<span class="linenos">293</span>    <span class="n">main</span><span class="p">()</span>
+<span class="linenos">282</span>        <span class="o">.</span><span class="n">solve</span><span class="p">()</span>
+<span class="linenos">283</span>    <span class="p">)</span>
+<span class="linenos">284</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
+<span class="linenos">285</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
+<span class="linenos">286</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
+<span class="linenos">287</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
+<span class="linenos">288</span>
+<span class="linenos">289</span>
+<span class="linenos">290</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<span class="linenos">291</span>    <span class="n">main</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>

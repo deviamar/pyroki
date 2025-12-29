@@ -290,8 +290,8 @@
 points, while avoiding world-collisions).</p>
 <p>All examples can be run by first cloning the PyRoki repository, which includes the <code class="docutils literal notranslate"><span class="pre">pyroki_snippets</span></code> implementation details.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos">  1</span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="linenos">  2</span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypedDict</span>
-<span class="linenos">  3</span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="linenos">  2</span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
+<span class="linenos">  3</span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tuple</span><span class="p">,</span> <span class="n">TypedDict</span>
 <span class="linenos">  4</span>
 <span class="linenos">  5</span><span class="kn">import</span><span class="w"> </span><span class="nn">jax</span>
 <span class="linenos">  6</span><span class="kn">import</span><span class="w"> </span><span class="nn">jax.numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">jnp</span>
@@ -301,9 +301,9 @@ points, while avoiding world-collisions).</p>
 <span class="linenos"> 10</span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">onp</span>
 <span class="linenos"> 11</span><span class="kn">import</span><span class="w"> </span><span class="nn">pyroki</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pk</span>
 <span class="linenos"> 12</span><span class="kn">import</span><span class="w"> </span><span class="nn">viser</span>
-<span class="linenos"> 13</span><span class="kn">from</span><span class="w"> </span><span class="nn">viser.extras</span><span class="w"> </span><span class="kn">import</span> <span class="n">ViserUrdf</span>
-<span class="linenos"> 14</span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroki.collision</span><span class="w"> </span><span class="kn">import</span> <span class="n">colldist_from_sdf</span><span class="p">,</span> <span class="n">collide</span>
-<span class="linenos"> 15</span><span class="kn">from</span><span class="w"> </span><span class="nn">robot_descriptions.loaders.yourdfpy</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_robot_description</span>
+<span class="linenos"> 13</span><span class="kn">from</span><span class="w"> </span><span class="nn">pyroki.collision</span><span class="w"> </span><span class="kn">import</span> <span class="n">colldist_from_sdf</span><span class="p">,</span> <span class="n">collide</span>
+<span class="linenos"> 14</span><span class="kn">from</span><span class="w"> </span><span class="nn">robot_descriptions.loaders.yourdfpy</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_robot_description</span>
+<span class="linenos"> 15</span><span class="kn">from</span><span class="w"> </span><span class="nn">viser.extras</span><span class="w"> </span><span class="kn">import</span> <span class="n">ViserUrdf</span>
 <span class="linenos"> 16</span>
 <span class="linenos"> 17</span><span class="kn">from</span><span class="w"> </span><span class="nn">retarget_helpers._utils</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
 <span class="linenos"> 18</span>    <span class="n">SMPL_JOINT_NAMES</span><span class="p">,</span>
@@ -459,7 +459,7 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">168</span>    <span class="n">joints_to_move_less</span> <span class="o">=</span> <span class="n">jnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
 <span class="linenos">169</span>        <span class="p">[</span>
 <span class="linenos">170</span>            <span class="n">robot</span><span class="o">.</span><span class="n">joints</span><span class="o">.</span><span class="n">actuated_names</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
-<span class="linenos">171</span>            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;left_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;right_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;torso_joint&quot;</span><span class="p">]</span>
+<span class="linenos">171</span>            <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">[</span><span class="s2">&quot;left_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;right_hip_yaw_joint&quot;</span><span class="p">,</span> <span class="s2">&quot;waist_yaw_joint&quot;</span><span class="p">]</span>
 <span class="linenos">172</span>        <span class="p">]</span>
 <span class="linenos">173</span>    <span class="p">)</span>
 <span class="linenos">174</span>    <span class="c1"># - Foot indices.</span>
@@ -788,18 +788,16 @@ points, while avoiding world-collisions).</p>
 <span class="linenos">497</span>            <span class="p">],</span>
 <span class="linenos">498</span>        <span class="p">)</span>
 <span class="linenos">499</span>        <span class="o">.</span><span class="n">analyze</span><span class="p">()</span>
-<span class="linenos">500</span>        <span class="o">.</span><span class="n">solve</span><span class="p">(</span>
-<span class="linenos">501</span>            <span class="n">augmented_lagrangian</span><span class="o">=</span><span class="n">jaxls</span><span class="o">.</span><span class="n">AugmentedLagrangianConfig</span><span class="p">(</span><span class="n">max_iterations</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
-<span class="linenos">502</span>        <span class="p">)</span>
-<span class="linenos">503</span>    <span class="p">)</span>
-<span class="linenos">504</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
-<span class="linenos">505</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
-<span class="linenos">506</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
-<span class="linenos">507</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
-<span class="linenos">508</span>
-<span class="linenos">509</span>
-<span class="linenos">510</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
-<span class="linenos">511</span>    <span class="n">main</span><span class="p">()</span>
+<span class="linenos">500</span>        <span class="o">.</span><span class="n">solve</span><span class="p">()</span>
+<span class="linenos">501</span>    <span class="p">)</span>
+<span class="linenos">502</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_Ts_world_root</span><span class="p">]</span>
+<span class="linenos">503</span>    <span class="n">offset</span> <span class="o">=</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_offset</span><span class="p">]</span>
+<span class="linenos">504</span>    <span class="n">transform</span> <span class="o">=</span> <span class="n">jaxlie</span><span class="o">.</span><span class="n">SE3</span><span class="o">.</span><span class="n">from_translation</span><span class="p">(</span><span class="n">offset</span><span class="p">)</span> <span class="o">@</span> <span class="n">transform</span>
+<span class="linenos">505</span>    <span class="k">return</span> <span class="n">transform</span><span class="p">,</span> <span class="n">solution</span><span class="p">[</span><span class="n">var_joints</span><span class="p">]</span>
+<span class="linenos">506</span>
+<span class="linenos">507</span>
+<span class="linenos">508</span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<span class="linenos">509</span>    <span class="n">main</span><span class="p">()</span>
 </pre></div>
 </div>
 </section>
