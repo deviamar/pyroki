@@ -37,12 +37,6 @@ from ._residuals._sphere_collision_analytic_jac import (
     sphere_world_collision_cost_analytic_jac as sphere_world_collision_cost_analytic_jac,
     sphere_world_collision_constraint_analytic_jac as sphere_world_collision_constraint_analytic_jac,
 )
-from ._residuals._capsule_collision_analytic_jac import (
-    capsule_self_collision_cost_analytic_jac as capsule_self_collision_cost_analytic_jac,
-    capsule_self_collision_constraint_analytic_jac as capsule_self_collision_constraint_analytic_jac,
-    capsule_world_collision_cost_analytic_jac as capsule_world_collision_cost_analytic_jac,
-    capsule_world_collision_constraint_analytic_jac as capsule_world_collision_constraint_analytic_jac,
-)
 
 # Pose costs
 pose_cost = Cost.factory(pose_residual)
