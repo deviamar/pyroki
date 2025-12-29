@@ -128,7 +128,7 @@ def solve_bimanual_ik_analytic(
             robot=robot,
             robot_coll=robot_coll,
             joint_var=joint_var,
-            margin=0.02,
+            margin=0.0,
             # weight=5.0,
         ),
         pk.costs.limit_cost(
@@ -156,7 +156,7 @@ def solve_bimanual_ik_analytic(
         .solve(
             verbose=False,
             linear_solver="dense_cholesky",
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
+            # augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
         )
     )
     return sol[joint_var]
@@ -207,7 +207,7 @@ def solve_bimanual_ik_autodiff(
             robot,
             robot_coll=robot_coll,
             joint_var=joint_var,
-            margin=0.02,
+            margin=0.0,
             # weight=5.0,
         ),
         pk.costs.limit_constraint(
@@ -235,7 +235,7 @@ def solve_bimanual_ik_autodiff(
         .solve(
             verbose=False,
             linear_solver="dense_cholesky",
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
+            # augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
         )
     )
     return sol[joint_var]

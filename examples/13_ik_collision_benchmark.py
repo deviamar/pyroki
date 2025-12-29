@@ -108,18 +108,18 @@ def solve_ik_analytic(
             rest_pose=jnp.array(joint_var.default_factory()),
             weight=0.01,
         ),
-        pk.costs.sphere_self_collision_cost_analytic_jac(
+        pk.costs.sphere_self_collision_constraint_analytic_jac(
             robot=robot,
             robot_coll=robot_coll,
             joint_var=joint_var,
             margin=0.02,
-            weight=5.0,
+            # weight=5.0,
         ),
         pk.costs.limit_constraint(
             robot,
             joint_var,
         ),
-        pk.costs.sphere_world_collision_cost_analytic_jac(
+        pk.costs.sphere_world_collision_constraint_analytic_jac(
             robot=robot,
             robot_coll=robot_coll,
             joint_var=joint_var,
@@ -128,7 +128,7 @@ def solve_ik_analytic(
             weight=1.0,
         ),
         *[
-            pk.costs.world_collision_cost(
+            pk.costs.world_collision_constraint(
                 robot, robot_coll, joint_var, halfspace, margin=0.05
             )
             for halfspace in world_halfspaces
@@ -141,7 +141,7 @@ def solve_ik_analytic(
         .solve(
             verbose=False,
             linear_solver="dense_cholesky",
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
+            # augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
         )
     )
     return sol[joint_var]
@@ -174,12 +174,12 @@ def solve_ik_autodiff(
             rest_pose=jnp.array(joint_var.default_factory()),
             weight=0.01,
         ),
-        pk.costs.sphere_self_collision_cost(
+        pk.costs.sphere_self_collision_constraint(
             robot,
             robot_coll=robot_coll,
             joint_var=joint_var,
             margin=0.02,
-            weight=5.0,
+            # weight=5.0,
         ),
         pk.costs.limit_constraint(
             robot,
@@ -206,7 +206,7 @@ def solve_ik_autodiff(
         .solve(
             verbose=False,
             linear_solver="dense_cholesky",
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
+            # augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
         )
     )
     return sol[joint_var]
