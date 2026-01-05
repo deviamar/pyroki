@@ -69,7 +69,9 @@ def main():
     base_frame = server.scene.add_frame("/base", show_axes=False)
     urdf_vis = ViserUrdf(server, urdf, root_node_name="/base")
     playing = server.gui.add_checkbox("playing", True, disabled=True)
-    timestep_slider = server.gui.add_slider("timestep", 0, num_timesteps - 1, 1, 0, disabled=True)
+    timestep_slider = server.gui.add_slider(
+        "timestep", 0, num_timesteps - 1, 1, 0, disabled=True
+    )
 
     # Add object mesh to scene
     server.scene.add_mesh_trimesh("/object", object_mesh)
@@ -265,7 +267,9 @@ def solve_single_frame(
     ) -> jax.Array:
         """Smoothness cost towards previous frame's root pose."""
         T_world_root = var_values[var_T_world_root]
-        return (T_world_root.inverse() @ prev_T_world_root).log() * weights["smoothness"]
+        return (T_world_root.inverse() @ prev_T_world_root).log() * weights[
+            "smoothness"
+        ]
 
     costs: list[jaxls.Cost] = [
         # Laplacian cost
@@ -300,7 +304,6 @@ def solve_single_frame(
                     var_T_world_root.with_value(init_T_world_root),
                 ]
             ),
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=1),
         )
     )
 
