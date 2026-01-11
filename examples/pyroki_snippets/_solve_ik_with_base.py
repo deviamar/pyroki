@@ -3,9 +3,7 @@ import jax.numpy as jnp
 import jax_dataclasses as jdc
 import jaxlie
 import jaxls
-
 import numpy as onp
-
 import pyroki as pk
 
 
@@ -22,6 +20,7 @@ def solve_ik_with_base(
 ) -> tuple[onp.ndarray, onp.ndarray, onp.ndarray]:
     """
     Solves the basic IK problem for a robot with a mobile base.
+    Weights are tuned for the Fetch mobile robot.
 
     Args:
         robot: PyRoKi Robot.
@@ -106,11 +105,13 @@ def _solve_ik_jax(
         pk.costs.rest_with_base_cost(
             joint_var,
             base_var,
-            jnp.array(joint_var.default_factory()),
+            jnp.array(prev_cfg),
             jnp.array(
-                [0.01] * robot.joints.num_actuated_joints
-                + [0.1] * 3  # Base position DoF.
-                + [0.001] * 3,  # Base orientation DoF.
+                [0.1] * 2
+                + [2.0]  # fetch torso_lift is at index 2; regularize it like base DoF.
+                + [0.1] * (robot.joints.num_actuated_joints - 3)
+                + [2.0] * 3  # Base position DoF.
+                + [0.5] * 3,  # Base orientation DoF.
             ),
         ),
     ]
@@ -128,7 +129,6 @@ def _solve_ik_jax(
                 [joint_var.with_value(prev_cfg), base_var]
             ),
             verbose=False,
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=2),
         )
     )
     return sol[base_var], sol[joint_var]

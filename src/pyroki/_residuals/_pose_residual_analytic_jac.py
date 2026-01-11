@@ -37,16 +37,20 @@ def _get_actuated_joints_applied_to_target(
 
     def body_fun(joint_idx, indices):
         # Find the corresponding active actuated joint.
+        actuated_indices = jnp.array(robot.joints.actuated_indices, dtype=jnp.int32)
+        mimic_act_indices = jnp.array(robot.joints.mimic_act_indices, dtype=jnp.int32)
+        parent_indices = jnp.array(robot.joints.parent_indices, dtype=jnp.int32)
+
         active_act_joint = jnp.where(
-            robot.joints.actuated_indices[joint_idx] != -1,
+            actuated_indices[joint_idx] != -1,
             # The current joint is actuated.
-            robot.joints.actuated_indices[joint_idx],
+            actuated_indices[joint_idx],
             # The current joint is not actuated; this is -1 if not a mimic joint.
-            robot.joints.mimic_act_indices[joint_idx],
+            mimic_act_indices[joint_idx],
         )
 
         # Find the parent of the current joint.
-        parent_joint = robot.joints.parent_indices[joint_idx]
+        parent_joint = parent_indices[joint_idx]
 
         # Continue traversing up the kinematic tree, using the parent joint.
         # This value may either go up or down, since there's no guarantee that
@@ -77,6 +81,7 @@ def pose_cost_analytic_jac(
     target_link_index: jax.Array,
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
+    joint_mask: jax.Array | float = 1.0,
 ) -> jaxls.Cost:
     """Create a pose cost with analytic Jacobian computation.
 
@@ -89,6 +94,9 @@ def pose_cost_analytic_jac(
         target_link_index: Index of target link (int32).
         pos_weight: Weight for position error.
         ori_weight: Weight for orientation error.
+        joint_mask: Optional array of shape (n_actuated_joints,) with values in [0, 1].
+            1.0 = joint is optimized, 0.0 = joint is locked (zero Jacobian).
+            Defaults to 1.0 (all joints optimized).
 
     Returns:
         Cost object for pose matching.
@@ -119,10 +127,11 @@ def pose_cost_analytic_jac(
 
     # Compute applied joints.
     robot = broadcast_batch_axes(robot)
-    base_link_mask = robot.links.parent_joint_indices == -1
-    parent_joint_indices = jnp.where(
-        base_link_mask, 0, robot.links.parent_joint_indices
+    link_parent_joint_indices = jnp.array(
+        robot.links.parent_joint_indices, dtype=jnp.int32
     )
+    base_link_mask = link_parent_joint_indices == -1
+    parent_joint_indices = jnp.where(base_link_mask, 0, link_parent_joint_indices)
     target_joint_idx = parent_joint_indices[
         tuple(jnp.arange(d) for d in parent_joint_indices.shape[:-1])
         + (target_link_index,)
@@ -139,6 +148,7 @@ def pose_cost_analytic_jac(
         pos_weight,
         ori_weight,
         joints_applied_to_target,
+        joint_mask,
     )
 
 
@@ -154,6 +164,7 @@ def _pose_cost_jac(
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
     joints_applied_to_target: jax.Array,
+    joint_mask: jax.Array | float,
 ) -> jax.Array:
     """Jacobian for pose cost with analytic computation."""
     del vals, joint_var, target_pose  # Unused!
@@ -210,6 +221,9 @@ def _pose_cost_jac(
         .add((joints_applied_to_target[None, :] != -1) * jac)
     )
 
+    # Apply joint mask: zero out Jacobian columns for locked joints.
+    jac = jac * joint_mask
+
     # Apply weights
     weights = jnp.array([pos_weight] * 3 + [ori_weight] * 3)
     return jac * weights[:, None]
@@ -225,9 +239,10 @@ def _pose_cost_analytical_jac(
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
     joints_applied_to_target: jax.Array,
+    joint_mask: jax.Array | float,
 ) -> tuple[jax.Array, _PoseCostJacCache]:
     """Computes the residual for matching link poses to target poses."""
-    del joints_applied_to_target
+    del joints_applied_to_target, joint_mask  # Only used in Jacobian
     assert target_link_index.dtype == jnp.int32
     joint_cfg = vals[joint_var]
 

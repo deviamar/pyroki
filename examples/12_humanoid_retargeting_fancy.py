@@ -5,8 +5,8 @@ points, while avoiding world-collisions).
 """
 
 import time
-from typing import Tuple, TypedDict
 from pathlib import Path
+from typing import Tuple, TypedDict
 
 import jax
 import jax.numpy as jnp
@@ -16,9 +16,9 @@ import jaxls
 import numpy as onp
 import pyroki as pk
 import viser
-from viser.extras import ViserUrdf
 from pyroki.collision import colldist_from_sdf, collide
 from robot_descriptions.loaders.yourdfpy import load_robot_description
+from viser.extras import ViserUrdf
 
 from retarget_helpers._utils import (
     SMPL_JOINT_NAMES,
@@ -174,7 +174,7 @@ def solve_retargeting(
     joints_to_move_less = jnp.array(
         [
             robot.joints.actuated_names.index(name)
-            for name in ["left_hip_yaw_joint", "right_hip_yaw_joint", "torso_joint"]
+            for name in ["left_hip_yaw_joint", "right_hip_yaw_joint", "waist_yaw_joint"]
         ]
     )
     # - Foot indices.
@@ -503,9 +503,7 @@ def solve_retargeting(
             ],
         )
         .analyze()
-        .solve(
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
-        )
+        .solve()
     )
     transform = solution[var_Ts_world_root]
     offset = solution[var_offset]

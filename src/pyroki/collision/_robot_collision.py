@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 import jax
 import jax.numpy as jnp
 import jax_dataclasses as jdc
 import jaxlie
+import numpy as onp
 import trimesh
 import yourdfpy
 from jaxtyping import Array, Float, Int
@@ -15,8 +16,8 @@ if TYPE_CHECKING:
     from pyroki._robot import Robot
 
 from .._robot_urdf_parser import RobotURDFParser
-from ._collision import collide, pairwise_collide
-from ._geometry import Capsule, CollGeom
+from ._collision import collide
+from ._geometry import Capsule, CollGeom, Sphere
 
 
 @jdc.pytree_dataclass
@@ -30,10 +31,13 @@ class RobotCollision:
     coll: CollGeom
     """Collision geometries for the robot (relative to their parent link frame)."""
 
-    active_idx_i: Int[Array, " P"]
-    """Row indices (first link) of active self-collision pairs to check."""
-    active_idx_j: Int[Array, " P"]
-    """Column indices (second link) of active self-collision pairs to check."""
+    active_idx_i: jdc.Static[tuple[int, ...]]
+    """First index of active self-collision pairs (link indices for capsule, geometry indices for sphere)."""
+    active_idx_j: jdc.Static[tuple[int, ...]]
+    """Second index of active self-collision pairs (link indices for capsule, geometry indices for sphere)."""
+
+    _geom_to_link_idx: Int[Array, " num_geoms"]
+    """Maps each geometry to its parent link index (for FK transform lookup)."""
 
     @staticmethod
     def from_urdf(
@@ -81,7 +85,7 @@ class RobotCollision:
         assert capsules.get_batch_axes() == (link_info.num_links,)
 
         # Directly compute active pair indices
-        active_idx_i, active_idx_j = RobotCollision._compute_active_pair_indices(
+        active_idx_i, active_idx_j = RobotCollision._compute_collision_pair_indices(
             link_names=link_name_list,
             urdf=urdf,
             user_ignore_pairs=user_ignore_pairs,
@@ -99,57 +103,169 @@ class RobotCollision:
             active_idx_i=active_idx_i,
             active_idx_j=active_idx_j,
             coll=capsules,
+            _geom_to_link_idx=jnp.arange(link_info.num_links, dtype=jnp.int32),
         )
 
     @staticmethod
-    def _compute_active_pair_indices(
-        link_names: tuple[str, ...],
+    def from_sphere_decomposition(
+        sphere_decomposition: dict[str, dict[str, list]],
         urdf: yourdfpy.URDF,
+        user_ignore_pairs: tuple[tuple[str, str], ...] = (),
+        ignore_immediate_adjacents: bool = True,
+    ) -> "RobotCollision":
+        """
+        Build a RobotCollision model from sphere decomposition data.
+
+        Args:
+            sphere_decomposition: Dict mapping link names to sphere specs.
+                Format: {'link_name': {'centers': [[x,y,z], ...], 'radii': [r, ...]}, ...}
+                Links not in this dict will have no collision geometry (empty).
+            urdf: URDF object used to determine link names and compute ignore pairs.
+            user_ignore_pairs: Additional pairs of link names to ignore for self-collision.
+            ignore_immediate_adjacents: If True, automatically ignore collisions
+                between adjacent (parent/child) links based on the URDF structure.
+
+        Returns:
+            RobotCollision configured for sphere-based collision checking.
+        """
+        _, link_info = RobotURDFParser.parse(urdf)
+        link_names = link_info.names
+        num_links = len(link_names)
+
+        # Validate sphere_decomposition structure
+        assert all(
+            d.keys() == {"centers", "radii"} for d in sphere_decomposition.values()
+        )
+        for link_name, link_data in sphere_decomposition.items():
+            assert isinstance(link_data, dict)
+            centers = link_data.get("centers", [])
+            radii = link_data.get("radii", [])
+            assert centers is not None and radii is not None
+            assert len(centers) == len(radii)
+            assert all(len(c) == 3 for c in centers)
+            assert all(r >= 0 for r in radii)
+
+        # Build flat sphere arrays and track link indices
+        all_centers: list[list[float]] = []
+        all_radii: list[float] = []
+        sphere_link_indices: list[int] = []
+        geom_counts: list[int] = []
+
+        for link_idx, link_name in enumerate(link_names):
+            link_data = sphere_decomposition.get(
+                link_name, {"centers": [], "radii": []}
+            )
+            link_centers = link_data.get("centers", [])
+            link_radii = link_data.get("radii", [])
+            assert link_centers is not None and link_radii is not None
+
+            geom_counts.append(len(link_centers))
+
+            for center, radius in zip(link_centers, link_radii):
+                all_centers.append(list(center))
+                all_radii.append(float(radius))
+                sphere_link_indices.append(link_idx)
+
+        num_geoms = len(all_centers)
+        assert num_geoms > 0, "No spheres found in the provided decomposition."
+
+        # Create flat Sphere with shape (num_geoms,)
+        centers_array = jnp.array(all_centers)  # (num_geoms, 3)
+        radii_array = jnp.array(all_radii)  # (num_geoms,)
+        spheres = Sphere.from_center_and_radius(centers_array, radii_array)
+        assert spheres.get_batch_axes() == (num_geoms,)
+
+        # Compute flat geometry-pair indices
+        active_idx_i, active_idx_j = RobotCollision._compute_collision_pair_indices(
+            link_names=link_names,
+            urdf=urdf,
+            user_ignore_pairs=user_ignore_pairs,
+            ignore_immediate_adjacents=ignore_immediate_adjacents,
+            geom_counts=onp.array(geom_counts, dtype=onp.int32),
+        )
+
+        logger.info(
+            f"Created RobotCollision (sphere mode) with {num_links} links, "
+            f"{num_geoms} total spheres, and {len(active_idx_i)} active pairs."
+        )
+
+        return RobotCollision(
+            num_links=num_links,
+            link_names=link_names,
+            coll=spheres,
+            active_idx_i=active_idx_i,
+            active_idx_j=active_idx_j,
+            _geom_to_link_idx=jnp.array(sphere_link_indices, dtype=jnp.int32),
+        )
+
+    @staticmethod
+    def _compute_collision_pair_indices(
+        link_names: tuple[str, ...],
+        urdf: yourdfpy.URDF | None,
         user_ignore_pairs: tuple[tuple[str, str], ...],
         ignore_immediate_adjacents: bool,
-    ) -> Tuple[Int[Array, " P"], Int[Array, " P"]]:
+        geom_counts: onp.ndarray | None = None,
+    ) -> tuple[tuple[int, ...], tuple[int, ...]]:
         """
-        Computes the indices (i, j) of pairs where i < j and the pair should
-        be actively checked for self-collision.
+        Compute collision pair indices for self-collision checking.
+
+        When geom_counts is None (capsule mode), returns link-level indices.
+        When geom_counts is provided (sphere mode), returns flat geometry-level indices.
 
         Args:
             link_names: Tuple of link names in order.
-            urdf: Parsed URDF object.
-            user_ignore_pairs: List of (name1, name2) pairs to explicitly ignore.
+            urdf: URDF object for adjacency info.
+            user_ignore_pairs: Pairs of link names to explicitly ignore.
             ignore_immediate_adjacents: Whether to ignore parent-child pairs from URDF.
+            geom_counts: Array of geometry counts per link. If None, returns link indices.
 
         Returns:
             Tuple of (active_i, active_j) index arrays.
         """
-        # --- Start: Logic combined from _build_ignore_matrix --- #
         num_links = len(link_names)
         link_name_to_idx = {name: i for i, name in enumerate(link_names)}
-        ignore_matrix = jnp.zeros((num_links, num_links), dtype=bool)
-        ignore_matrix = ignore_matrix.at[
-            jnp.arange(num_links), jnp.arange(num_links)
-        ].set(True)
-        if ignore_immediate_adjacents:
+
+        # Build ignore set with normalized pairs (smaller index first).
+        # Self-collision pairs not needed since loop uses li < lj.
+        ignore_set: set[tuple[int, int]] = set()
+
+        if ignore_immediate_adjacents and urdf is not None:
             for joint in urdf.joint_map.values():
                 parent_name = joint.parent
                 child_name = joint.child
                 if parent_name in link_name_to_idx and child_name in link_name_to_idx:
                     parent_idx = link_name_to_idx[parent_name]
                     child_idx = link_name_to_idx[child_name]
-                    ignore_matrix = ignore_matrix.at[parent_idx, child_idx].set(True)
-                    ignore_matrix = ignore_matrix.at[child_idx, parent_idx].set(True)
+                    ignore_set.add(
+                        (min(parent_idx, child_idx), max(parent_idx, child_idx))
+                    )
+
         for name1, name2 in user_ignore_pairs:
             if name1 in link_name_to_idx and name2 in link_name_to_idx:
                 idx1 = link_name_to_idx[name1]
                 idx2 = link_name_to_idx[name2]
-                ignore_matrix = ignore_matrix.at[idx1, idx2].set(True)
-                ignore_matrix = ignore_matrix.at[idx2, idx1].set(True)
+                ignore_set.add((min(idx1, idx2), max(idx1, idx2)))
 
-        idx_i, idx_j = jnp.tril_indices(num_links, k=-1)
-        should_check = ~ignore_matrix[idx_i, idx_j]
-        active_i = idx_i[should_check]
-        active_j = idx_j[should_check]
+        # Treat capsule mode as 1 geometry per link.
+        if geom_counts is None:
+            geom_counts = onp.ones(num_links, dtype=onp.int32)
 
-        return active_i, active_j
+        geom_offsets = onp.zeros(num_links + 1, dtype=onp.int32)
+        geom_offsets[1:] = onp.cumsum(geom_counts)
+
+        idx_i: list[int] = []
+        idx_j: list[int] = []
+
+        for li in range(num_links):
+            for lj in range(li + 1, num_links):
+                if (li, lj) in ignore_set:
+                    continue
+                for gi in range(geom_counts[li]):
+                    for gj in range(geom_counts[lj]):
+                        idx_i.append(int(geom_offsets[li] + gi))
+                        idx_j.append(int(geom_offsets[lj] + gj))
+
+        return (tuple(idx_i), tuple(idx_j))
 
     @staticmethod
     def _get_trimesh_collision_geometries(
@@ -259,7 +375,39 @@ class RobotCollision:
         Ts_link_world_wxyz_xyz = robot.forward_kinematics(cfg)
         Ts_link_world = jaxlie.SE3(Ts_link_world_wxyz_xyz)
 
-        return self.coll.transform(Ts_link_world)
+        # Index FK transforms by link for each geometry
+        Ts_per_geom = jaxlie.SE3(Ts_link_world.wxyz_xyz[..., self._geom_to_link_idx, :])
+        return self.coll.transform(Ts_per_geom)
+
+    def get_link_collision_meshes(self) -> dict[str, trimesh.Trimesh]:
+        """Get collision meshes for each link in their local coordinate frames.
+
+        Returns a dict mapping link_name -> trimesh in local link frame.
+        The meshes are NOT transformed to world frame - useful for attaching
+        to viser frames that are already positioned by ViserUrdf.update_cfg().
+        """
+        result: dict[str, trimesh.Trimesh] = {}
+
+        num_geoms = len(self._geom_to_link_idx)
+
+        # Group geometry indices by link
+        link_to_geom_indices: dict[int, list[int]] = {
+            i: [] for i in range(self.num_links)
+        }
+        for geom_idx in range(num_geoms):
+            link_idx = int(self._geom_to_link_idx[geom_idx])
+            link_to_geom_indices[link_idx].append(geom_idx)
+
+        for i, link_name in enumerate(self.link_names):
+            geom_indices = link_to_geom_indices[i]
+            if len(geom_indices) == 0:
+                mesh = trimesh.Trimesh()
+            else:
+                meshes = [self.coll._create_one_mesh((j,)) for j in geom_indices]
+                mesh = cast(trimesh.Trimesh, trimesh.util.concatenate(meshes))
+            result[link_name] = mesh
+
+        return result
 
     def get_swept_capsules(
         self,
@@ -270,9 +418,12 @@ class RobotCollision:
         """
         Computes swept-volume capsules between two configurations.
 
-        For each link, the capsule at cfg_prev and cfg_next is decomposed into
-        a fixed number of spheres (currently 5). Corresponding sphere pairs are
-        then connected by capsules to represent the swept volume.
+        For Capsule mode: Each capsule is decomposed into 5 spheres along its
+        axis. Corresponding sphere pairs are connected by capsules.
+        Returns shape: (5, *batch, num_links)
+
+        For Sphere mode: Each sphere's position at cfg_prev is connected to its
+        position at cfg_next by a capsule. Returns shape: (*batch, num_geoms)
 
         Args:
             robot: The Robot instance.
@@ -281,41 +432,31 @@ class RobotCollision:
 
         Returns:
             A Capsule object representing the swept volumes.
-            The batch axes will be (*batch, 5, num_links).
         """
-        n_segments = 5
-
-        # 1. Get collision geometries at start and end configurations
-        # Shape: (*batch, num_links)
-        coll_prev_world: Capsule = cast(Capsule, self.at_config(robot, cfg_prev))
-        coll_next_world: Capsule = cast(Capsule, self.at_config(robot, cfg_next))
-        assert isinstance(coll_prev_world, Capsule)
-        assert isinstance(coll_next_world, Capsule)
+        coll_prev_world = self.at_config(robot, cfg_prev)
+        coll_next_world = self.at_config(robot, cfg_next)
         assert coll_prev_world.get_batch_axes() == coll_next_world.get_batch_axes()
 
-        # 2. Decompose capsules into spheres
-        # Shape: (n_segments, *batch, num_links)
-        spheres_prev = coll_prev_world.decompose_to_spheres(n_segments)
-        spheres_next = coll_next_world.decompose_to_spheres(n_segments)
-        assert spheres_prev.get_batch_axes() == spheres_next.get_batch_axes(), (
-            "Sphere batch axes mismatch after decomposition."
-        )
-        expected_sphere_batch_axes = (
-            (n_segments,) + cfg_prev.shape[:-1] + (self.num_links,)
-        )
-        assert spheres_prev.get_batch_axes() == expected_sphere_batch_axes, (
-            f"Unexpected sphere batch axes: {spheres_prev.get_batch_axes()} vs {expected_sphere_batch_axes}"
-        )
+        if isinstance(coll_prev_world, Capsule):
+            assert isinstance(coll_next_world, Capsule)
+            n_segments = 5
+            spheres_prev = coll_prev_world.decompose_to_spheres(n_segments)
+            spheres_next = coll_next_world.decompose_to_spheres(n_segments)
+            assert spheres_prev.get_batch_axes() == spheres_next.get_batch_axes()
+            expected_batch = (n_segments,) + cfg_prev.shape[:-1] + (self.num_links,)
+            assert spheres_prev.get_batch_axes() == expected_batch
+            swept_capsules = Capsule.from_sphere_pairs(spheres_prev, spheres_next)
+            assert swept_capsules.get_batch_axes() == expected_batch
+            return swept_capsules
 
-        # 3. Create swept capsules by connecting corresponding sphere pairs
-        # Shape: (n_segments, *batch, num_links)
-        swept_capsules = Capsule.from_sphere_pairs(spheres_prev, spheres_next)
-        assert swept_capsules.get_batch_axes() == expected_sphere_batch_axes, (
-            "Swept capsule batch axes mismatch."
-        )
+        elif isinstance(coll_prev_world, Sphere):
+            assert isinstance(coll_next_world, Sphere)
+            return Capsule.from_sphere_pairs(coll_prev_world, coll_next_world)
 
-        # The result contains capsules for each segment of each link.
-        return swept_capsules
+        else:
+            raise TypeError(
+                f"Unsupported collision geometry type: {type(coll_prev_world)}"
+            )
 
     def compute_self_collision_distance(
         self,
@@ -326,7 +467,6 @@ class RobotCollision:
         Computes the signed distances for active self-collision pairs.
 
         Args:
-            robot_coll: The robot's collision model with precomputed active pair indices.
             robot: The robot's kinematic model.
             cfg: The robot configuration (actuated joints).
 
@@ -337,23 +477,18 @@ class RobotCollision:
         """
         batch_axes = cfg.shape[:-1]
 
-        # 1. Get collision geometry at the current config
+        # Get collision geometry at the current config
         coll = self.at_config(robot, cfg)
-        assert coll.get_batch_axes() == (*batch_axes, self.num_links)
 
-        # 2. Compute all pairwise distances using the imported function
-        dist_matrix = pairwise_collide(coll, coll)
-        assert dist_matrix.shape == (
-            *batch_axes,
-            self.num_links,
-            self.num_links,
-        )
+        # Extract geometry pairs using precomputed indices
+        idx_i = jnp.array(self.active_idx_i, dtype=jnp.int32)
+        idx_j = jnp.array(self.active_idx_j, dtype=jnp.int32)
 
-        # 3. Extract distances for the precomputed active pairs
-        # Use advanced indexing with the stored indices
-        active_distances = dist_matrix[..., self.active_idx_i, self.active_idx_j]
+        coll_i = jax.tree.map(lambda x: x[..., idx_i, :], coll)
+        coll_j = jax.tree.map(lambda x: x[..., idx_j, :], coll)
 
-        # Expected shape check
+        active_distances = collide(coll_i, coll_j)
+
         num_active_pairs = len(self.active_idx_i)
         assert active_distances.shape == (*batch_axes, num_active_pairs)
 
@@ -363,62 +498,57 @@ class RobotCollision:
         self,
         robot: Robot,
         cfg: Float[Array, "*batch_cfg actuated_count"],
-        world_geom: CollGeom,  # Shape: (*batch_world, M, ...)
-    ) -> Float[Array, "*batch_combined N M"]:
+        world_geom: CollGeom,  # Shape: (*batch_world, num_world, ...)
+    ) -> Float[Array, "*batch_combined num_geoms num_world"]:
         """
-        Computes the signed distances between all robot links (N) and all world obstacles (M).
+        Computes the signed distances between all robot geometries and all world obstacles.
 
         Args:
-            robot_coll: The robot's collision model.
             robot: The robot's kinematic model.
             cfg: The robot configuration (actuated joints).
             world_geom: Collision geometry representing world obstacles. If representing a
                 single obstacle, it should have batch shape (). If multiple, the last axis
-                is interpreted as the collection of world objects (M).
+                is interpreted as the collection of world objects (num_world).
                 The batch dimensions (*batch_world) must be broadcast-compatible with cfg's
                 batch axes (*batch_cfg).
 
         Returns:
-            Matrix of signed distances between each robot link and each world object.
-            Shape: (*batch_combined, N, M), where N=num_links, M=num_world_objects.
+            Matrix of signed distances between each robot geometry and each world object.
+            Shape: (*batch_combined, num_geoms, num_world), where num_geoms is the number of
+            collision geometries (num_links for capsule mode, total spheres for sphere mode).
             Positive distance means separation, negative means penetration.
         """
-        # 1. Get robot collision geometry at the current config
-        # Shape: (*batch_cfg, N, ...)
+        # Get robot collision geometry at the current config
         coll_robot_world = self.at_config(robot, cfg)
-        N = self.num_links
-        assert coll_robot_world.get_batch_axes()[-1] == N
+
+        # Derive num_geoms from collision geometry batch axes
+        num_geoms = coll_robot_world.get_batch_axes()[-1]
         batch_cfg_shape = coll_robot_world.get_batch_axes()[:-1]
 
-        # 2. Normalize world_geom shape and determine M
+        # Normalize world_geom shape and determine num_world
         world_axes = world_geom.get_batch_axes()
         if len(world_axes) == 0:  # Single world object
-            # Use the object's broadcast_to method to add the M=1 axis correctly
             _world_geom = world_geom.broadcast_to((1,))
-            M = 1
-            batch_world_shape = ()
+            num_world = 1
+            batch_world_shape: tuple[int, ...] = ()
         else:  # Multiple world objects
             _world_geom = world_geom
-            M = world_axes[-1]
+            num_world = world_axes[-1]
             batch_world_shape = world_axes[:-1]
 
-        # 3. Compute distances: Map collide over robot links (axis -2) vs _world_geom (None)
-        # _world_geom is guaranteed to have the M axis now.
-        _collide_links_vs_world = jax.vmap(collide, in_axes=(-2, None), out_axes=(-2))
-        dist_matrix = _collide_links_vs_world(coll_robot_world, _world_geom)
+        # Compute distances: vmap collide over robot geometries vs world objects
+        _collide_geoms_vs_world = jax.vmap(collide, in_axes=(-2, None), out_axes=(-2))
+        dist_matrix = _collide_geoms_vs_world(coll_robot_world, _world_geom)
 
-        # 4. Result shape check
-        # Calculate expected shape based on broadcasting rules
+        # Result shape check
         expected_batch_combined = jnp.broadcast_shapes(
             batch_cfg_shape, batch_world_shape
         )
-        expected_shape = (*expected_batch_combined, N, M)
+        expected_shape = (*expected_batch_combined, num_geoms, num_world)
 
-        # Perform the assertion without try-except or complex logic
         assert dist_matrix.shape == expected_shape, (
             f"Output shape mismatch. Expected {expected_shape}, Got {dist_matrix.shape}. "
             f"Robot axes: {coll_robot_world.get_batch_axes()}, Original World axes: {world_geom.get_batch_axes()}"
         )
 
-        # 5. Return the distance matrix
         return dist_matrix

@@ -147,7 +147,7 @@ def solve_retargeting(
     joints_to_move_less = jnp.array(
         [
             robot.joints.actuated_names.index(name)
-            for name in ["left_hip_yaw_joint", "right_hip_yaw_joint"]
+            for name in ["left_hip_yaw_joint", "right_hip_yaw_joint", "waist_yaw_joint"]
         ]
     )
 
@@ -284,9 +284,7 @@ def solve_retargeting(
             ],
         )
         .analyze()
-        .solve(
-            augmented_lagrangian=jaxls.AugmentedLagrangianConfig(max_iterations=5),
-        )
+        .solve()
     )
     transform = solution[var_Ts_world_root]
     offset = solution[var_offset]
