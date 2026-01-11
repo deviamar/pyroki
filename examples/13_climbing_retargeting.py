@@ -4,10 +4,12 @@ Retarget motion to G1 humanoid using Laplacian mesh deformation with diffIK.
 Based on the holosoma interaction mesh retargeting approach.
 """
 
+import json
 import time
 from pathlib import Path
 from typing import Tuple, TypedDict
 
+import trimesh
 import jax
 import jax.numpy as jnp
 import jax_dataclasses as jdc
@@ -48,6 +50,14 @@ def main():
     urdf = load_robot_description("g1_description")
     robot = pk.Robot.from_urdf(urdf)
 
+    sphere_json_path = Path(__file__).parent / "assets" / "g1_spheres.json"
+    with open(sphere_json_path, "r") as f:
+        sphere_decomposition = json.load(f)
+    robot_coll = pk.collision.RobotCollision.from_sphere_decomposition(
+        sphere_decomposition=sphere_decomposition,
+        urdf=urdf,
+    )
+
     # Load motion data and object
     asset_dir = Path(__file__).parent / "retarget_helpers" / "omniretarget_climb_data"
     motion = load_climb_motion(
@@ -75,6 +85,35 @@ def main():
 
     # Add object mesh to scene
     server.scene.add_mesh_trimesh("/object", object_mesh)
+
+    # Split up the object mesh into individual boxes.
+    meshes = object_mesh.split()
+    assert len(meshes) == 3
+    box_1_transform, box_1_extents = trimesh.bounds.oriented_bounds(meshes[0])
+    box_2_transform, box_2_extents = trimesh.bounds.oriented_bounds(meshes[1])
+    box_3_transform, box_3_extents = trimesh.bounds.oriented_bounds(meshes[2])
+    box_1_jaxlie_transform = jaxlie.SE3.from_matrix(box_1_transform).inverse()
+    box_2_jaxlie_transform = jaxlie.SE3.from_matrix(box_2_transform).inverse()
+    box_3_jaxlie_transform = jaxlie.SE3.from_matrix(box_3_transform).inverse()
+
+    coll_box = pk.collision.Box.from_extent(
+        extent=onp.array([box_1_extents, box_2_extents, box_3_extents]),
+        position=onp.array(
+            [
+                box_1_jaxlie_transform.translation(),
+                box_2_jaxlie_transform.translation(),
+                box_3_jaxlie_transform.translation(),
+            ]
+        ),
+        wxyz=onp.array(
+            [
+                box_1_jaxlie_transform.rotation().wxyz,
+                box_2_jaxlie_transform.rotation().wxyz,
+                box_3_jaxlie_transform.rotation().wxyz,
+            ]
+        ),
+    )
+    server.scene.add_mesh_trimesh("/box_coll_pk", coll_box.to_trimesh())
 
     # Add ground plane
     server.scene.add_grid("/grid", width=4, height=4, position=(0.0, 0.0, 0.0))
@@ -122,6 +161,8 @@ def main():
     for t in tqdm.trange(num_timesteps, desc="Solving frames"):
         T_world_root_t, joints_t = solve_single_frame(
             robot=robot,
+            robot_coll=robot_coll,
+            world_coll_list=[coll_box],
             target_lap=target_laplacians[t],
             object_points=object_points,
             g1_link_indices=g1_link_indices,
@@ -186,6 +227,8 @@ def main():
 @jdc.jit
 def solve_single_frame(
     robot: pk.Robot,
+    robot_coll: pk.collision.RobotCollision,
+    world_coll_list: list[pk.collision.CollGeom],
     target_lap: jnp.ndarray,
     object_points: jnp.ndarray,
     g1_link_indices: jnp.ndarray,
@@ -271,6 +314,23 @@ def solve_single_frame(
             "smoothness"
         ]
 
+    @jaxls.Cost.factory(kind="constraint_geq_zero")
+    def world_collision_constraint(
+        vals: jaxls.VarValues,
+        robot: pk.Robot,
+        robot_coll: pk.collision.RobotCollision,
+        joint_var: jaxls.Var[jax.Array],
+        var_T_world_root: jaxls.SE3Var,
+        world_geom: pk.collision.CollGeom,
+    ) -> jax.Array:
+        """Computes world collision violation residual. Residual is >0 if collision is detected."""
+        cfg = vals[joint_var]
+        world_geom_in_root = world_geom.transform(vals[var_T_world_root].inverse())
+        dist_matrix = robot_coll.compute_world_collision_distance(
+            robot, cfg, world_geom_in_root
+        )
+        return dist_matrix.flatten()
+
     costs: list[jaxls.Cost] = [
         # Laplacian cost
         laplacian_cost(var_T_world_root, var_joints),
@@ -288,7 +348,18 @@ def solve_single_frame(
             robot,
             var_joints,
         ),
+        # Collision avoidance constraint
+        pk.costs.self_collision_cost(
+            robot, robot_coll, var_joints, margin=0.01, weight=10.0
+        ),
     ]
+
+    for world_coll in world_coll_list:
+        costs.append(
+            world_collision_constraint(
+                robot, robot_coll, var_joints, var_T_world_root, world_coll
+            ),
+        )
 
     solution = (
         jaxls.LeastSquaresProblem(
