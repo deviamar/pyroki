@@ -126,9 +126,7 @@ def main():
             rest=0.01,
         ),  # type: ignore
     )
-    # Temporarily disable weight tuning during solve.
-    for handle in weights._weight_handles.values():
-        handle.disabled = True
+    rerun_button = server.gui.add_button("Retarget Trajectory")
 
     # Precompute interaction mesh (must be done outside JIT)
     n_robot_pts = len(mocap_indices)
@@ -155,45 +153,62 @@ def main():
 
     # Get the current robot status, step-by-step.
     list_T_world_root, list_joints = [], []
-    init_T_world_root = jaxlie.SE3.identity()
-    init_joints = jnp.array(robot.joint_var_cls.default_factory())
 
-    for t in tqdm.trange(num_timesteps, desc="Solving frames"):
-        T_world_root_t, joints_t = solve_single_frame(
-            robot=robot,
-            robot_coll=robot_coll,
-            world_coll_list=[coll_box],
-            target_lap=target_laplacians[t],
-            object_points=object_points,
-            g1_link_indices=g1_link_indices,
-            local_offsets=local_offsets,
-            adj_matrix=adj_matrix,
-            weights=weights.get_weights(),  # type: ignore
-            init_joints=init_joints,
-            init_T_world_root=init_T_world_root,
-            prev_joints=init_joints,
-            prev_T_world_root=init_T_world_root,
-        )
-        jax.block_until_ready((T_world_root_t, joints_t))
+    def retarget_trajectory():
+        nonlocal list_T_world_root, list_joints
+        list_T_world_root, list_joints = [], []
 
-        # Store results.
-        list_T_world_root.append(T_world_root_t)
-        list_joints.append(joints_t)
-        init_joints = joints_t
-        init_T_world_root = T_world_root_t
+        with server.atomic():
+            # Temporarily disable weight tuning during solve.
+            for handle in weights._weight_handles.values():
+                handle.disabled = True
+            rerun_button.disabled = True
 
-        # Update the visualization online.
-        timestep_slider.value = t
-        base_frame.wxyz = onp.array(T_world_root_t.wxyz_xyz[:4])
-        base_frame.position = onp.array(T_world_root_t.wxyz_xyz[4:])
-        urdf_vis.update_cfg(onp.array(joints_t))
+            tstep = timestep_slider.value = 0
 
-    # All results are ready; we should be able to do playback.
-    playing.disabled = False
-    timestep_slider.disabled = False
-    # We should also be able to tune weights now.
-    for handle in weights._weight_handles.values():
-        handle.disabled = False
+            init_T_world_root = jaxlie.SE3.identity()
+            init_joints = jnp.array(robot.joint_var_cls.default_factory())
+
+            for t in tqdm.trange(num_timesteps, desc="Solving frames"):
+                T_world_root_t, joints_t = solve_single_frame(
+                    robot=robot,
+                    robot_coll=robot_coll,
+                    world_coll_list=[coll_box],
+                    target_lap=target_laplacians[t],
+                    object_points=object_points,
+                    g1_link_indices=g1_link_indices,
+                    local_offsets=local_offsets,
+                    adj_matrix=adj_matrix,
+                    weights=weights.get_weights(),  # type: ignore
+                    init_joints=init_joints,
+                    init_T_world_root=init_T_world_root,
+                    prev_joints=init_joints,
+                    prev_T_world_root=init_T_world_root,
+                )
+                jax.block_until_ready((T_world_root_t, joints_t))
+
+                # Store results.
+                list_T_world_root.append(T_world_root_t)
+                list_joints.append(joints_t)
+                init_joints = joints_t
+                init_T_world_root = T_world_root_t
+
+                # Update the visualization online.
+                timestep_slider.value = t
+                base_frame.wxyz = onp.array(T_world_root_t.wxyz_xyz[:4])
+                base_frame.position = onp.array(T_world_root_t.wxyz_xyz[4:])
+                urdf_vis.update_cfg(onp.array(joints_t))
+
+            # All results are ready; we should be able to do playback.
+            playing.disabled = False
+            timestep_slider.disabled = False
+            # We should also be able to tune weights now.
+            for handle in weights._weight_handles.values():
+                handle.disabled = False
+            rerun_button.disabled = False
+
+    retarget_trajectory()
+    rerun_button.on_click(lambda _: retarget_trajectory())
 
     while True:
         with server.atomic():
@@ -303,14 +318,21 @@ def solve_single_frame(
         robot_cfg = var_values[var_robot_cfg]
         return (robot_cfg - prev_joints) * weights["smoothness"]
 
+    prev_T_world_joints = prev_T_world_root @ jaxlie.SE3(
+        robot.forward_kinematics(prev_joints)
+    )
+
     @jaxls.Cost.factory
-    def smoothness_to_prev_root(
+    def smoothness_to_prev_pose(
         var_values: jaxls.VarValues,
+        var_robot_cfg: jaxls.Var[jnp.ndarray],
         var_T_world_root: jaxls.SE3Var,
     ) -> jax.Array:
-        """Smoothness cost towards previous frame's root pose."""
+        """Smoothness cost towards previous frame's pose."""
         T_world_root = var_values[var_T_world_root]
-        return (T_world_root.inverse() @ prev_T_world_root).log() * weights[
+        T_root_robot = jaxlie.SE3(robot.forward_kinematics(var_values[var_robot_cfg]))
+        T_world_robot = T_world_root @ T_root_robot
+        return (prev_T_world_joints.inverse() @ T_world_robot).log() * weights[
             "smoothness"
         ]
 
@@ -336,7 +358,7 @@ def solve_single_frame(
         laplacian_cost(var_T_world_root, var_joints),
         # Smoothness to previous frame
         smoothness_to_prev_joints(var_joints),
-        smoothness_to_prev_root(var_T_world_root),
+        smoothness_to_prev_pose(var_joints, var_T_world_root),
         # Rest pose regularization (very small)
         pk.costs.rest_cost(
             var_joints,
@@ -354,6 +376,7 @@ def solve_single_frame(
         ),
     ]
 
+    # Collision avoidance with world objects
     for world_coll in world_coll_list:
         costs.append(
             world_collision_constraint(
