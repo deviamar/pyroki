@@ -374,18 +374,10 @@ def make_world_collision_penalty(
         cfg = vals[joint_var]
         Ts_world_root = vals[var_Ts_world_root]
 
-        is_batched = cfg.ndim > 1
-
-        def compute_dist_single(cfg_single, T_world_root_single):
-            world_geom_in_root = world_geom.transform(T_world_root_single.inverse())
-            return robot_coll.compute_world_collision_distance(
-                robot, cfg_single, world_geom_in_root
-            )
-
-        if is_batched:
-            dist = jax.vmap(compute_dist_single)(cfg, Ts_world_root)
-        else:
-            dist = compute_dist_single(cfg, Ts_world_root)
+        world_geom_in_root = world_geom.transform(Ts_world_root.inverse())
+        dist = robot_coll.compute_world_collision_distance(
+            robot, cfg, world_geom_in_root
+        )
 
         penalty = jnp.maximum(margin - dist, 0.0) * penalty_weight
         return penalty.flatten()
