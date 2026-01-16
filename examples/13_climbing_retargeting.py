@@ -54,6 +54,7 @@ class ClimbingRetargetingWeights(TypedDict):
 # Scale factor optimization variable
 class ScaleVar(jaxls.Var[jax.Array], default_factory=lambda: jnp.array(0.742)):
     """Optimization variable for mocap-to-robot scale factor."""
+
     ...
 
 
@@ -81,8 +82,14 @@ def main():
     object_points_unscaled = load_object_points(
         asset_dir / "multi_boxes.obj", sample_count=30, scale_factor=1.0
     )
-    # Keep collision mesh at reference scale (0.742) for collision detection
-    object_mesh = load_object_mesh(asset_dir / "multi_boxes.obj", scale_factor=0.742)
+    # Load collision mesh unscaled - will be scaled dynamically by var_scale
+    object_mesh_unscaled = load_object_mesh(
+        asset_dir / "multi_boxes.obj", scale_factor=1.0
+    )
+    # Keep a scaled version for initial visualization
+    object_mesh_vis = load_object_mesh(
+        asset_dir / "multi_boxes.obj", scale_factor=0.742
+    )
 
     # Subsample trajectory for faster optimization
     subsample_factor = 1
@@ -107,11 +114,12 @@ def main():
         "timestep", 0, num_timesteps - 1, 1, 0, disabled=True
     )
 
-    # Add object mesh to scene
-    server.scene.add_mesh_trimesh("/object", object_mesh)
+    # Add object mesh to scene (use scaled version for initial visualization)
+    server.scene.add_mesh_trimesh("/object", object_mesh_vis)
 
-    # Split up the object mesh into individual boxes.
-    meshes = object_mesh.split()
+    # Split up the unscaled object mesh into individual boxes for collision detection.
+    # These will be scaled dynamically by var_scale during optimization.
+    meshes = object_mesh_unscaled.split()
     assert len(meshes) == 3
     box_1_transform, box_1_extents = trimesh.bounds.oriented_bounds(meshes[0])
     box_2_transform, box_2_extents = trimesh.bounds.oriented_bounds(meshes[1])
@@ -137,6 +145,10 @@ def main():
             ]
         ),
     )
+    coll_plane = pk.collision.HalfSpace.from_point_and_normal(
+        point=jnp.array([0.0, 0.0, 0.0]),
+        normal=jnp.array([0.0, 0.0, 1.0]),
+    )
     server.scene.add_mesh_trimesh("/box_coll_pk", coll_box.to_trimesh())
 
     # Add ground plane
@@ -150,12 +162,14 @@ def main():
             pose_smoothness=1.0,
             rest=0.1,
             self_collision=0.5,
-            scale_init=0.742,  # Initial scale factor
+            scale_init=1.0,  # Initial scale factor
             scale_reg=0.1,  # Scale regularization weight
         ),  # type: ignore
     )
     rerun_button = server.gui.add_button("Retarget Trajectory")
-    scale_label = server.gui.add_text("Optimized scale", initial_value="--", disabled=True)
+    scale_label = server.gui.add_text(
+        "Optimized scale", initial_value="--", disabled=True
+    )
 
     # Precompute interaction mesh (must be done outside JIT)
     n_robot_pts = len(mocap_indices)
@@ -194,19 +208,21 @@ def main():
             rerun_button.disabled = True
 
         # Compute warm-start initialization via sequential IK on key frames
-        init_Ts_wxyz_xyz, init_joints_warmstart, init_scale = compute_warmstart_initialization(
-            robot=robot,
-            robot_coll=robot_coll,
-            world_coll_list=[coll_box],
-            target_laplacians_unscaled=target_laplacians_unscaled,
-            object_points_unscaled=object_points_unscaled,
-            g1_link_indices=g1_link_indices,
-            local_offsets=local_offsets,
-            adj_matrix=adj_matrix,
-            weights=weights.get_weights(),  # type: ignore
-            motion_unscaled=motion_unscaled,
-            mocap_indices=mocap_indices,
-            keyframe_interval=12,  # Reduced from 50 due to 4x subsampling
+        init_Ts_wxyz_xyz, init_joints_warmstart, init_scale = (
+            compute_warmstart_initialization(
+                robot=robot,
+                robot_coll=robot_coll,
+                world_coll_list=[coll_box, coll_plane],
+                target_laplacians_unscaled=target_laplacians_unscaled,
+                object_points_unscaled=object_points_unscaled,
+                g1_link_indices=g1_link_indices,
+                local_offsets=local_offsets,
+                adj_matrix=adj_matrix,
+                weights=weights.get_weights(),  # type: ignore
+                motion_unscaled=motion_unscaled,
+                mocap_indices=mocap_indices,
+                keyframe_interval=12,  # Reduced from 50 due to 4x subsampling
+            )
         )
 
         print("Solving trajectory optimization (all timesteps simultaneously)...")
@@ -215,7 +231,7 @@ def main():
         Ts_world_root, joints, final_scale = solve_trajectory(
             robot=robot,
             robot_coll=robot_coll,
-            world_coll_list=[coll_box],
+            world_coll_list=[coll_box, coll_plane],
             target_laplacians_unscaled=target_laplacians_unscaled,
             object_points_unscaled=object_points_unscaled,
             g1_link_indices=g1_link_indices,
@@ -251,6 +267,21 @@ def main():
             # Update scale display
             scale_label.value = f"{current_scale:.4f}"
 
+            # Update object mesh and collision box visualization with current scale
+            scaled_mesh = load_object_mesh(
+                asset_dir / "multi_boxes.obj", scale_factor=current_scale
+            )
+            server.scene.add_mesh_trimesh("/object", scaled_mesh)
+            # Update collision box visualization
+            scaled_coll_box = pk.collision.Box(
+                pose=jaxlie.SE3.from_rotation_and_translation(
+                    rotation=coll_box.pose.rotation(),
+                    translation=coll_box.pose.translation() * current_scale,
+                ),
+                size=coll_box.size * current_scale,
+            )
+            server.scene.add_mesh_trimesh("/box_coll_pk", scaled_coll_box.to_trimesh())
+
     retarget_trajectory()
     rerun_button.on_click(lambda _: retarget_trajectory())
 
@@ -264,7 +295,9 @@ def main():
             urdf_vis.update_cfg(onp.array(list_joints[tstep]))
 
             # Show target keypoints (scaled by optimized scale for visualization)
-            keypoints_to_show = motion_unscaled[tstep, onp.array(mocap_indices)] * current_scale
+            keypoints_to_show = (
+                motion_unscaled[tstep, onp.array(mocap_indices)] * current_scale
+            )
             server.scene.add_point_cloud(
                 "/target_keypoints",
                 onp.array(keypoints_to_show),
@@ -276,7 +309,9 @@ def main():
             server.scene.add_point_cloud(
                 "/object_points",
                 onp.array(object_points_unscaled) * current_scale,
-                onp.array((255, 0, 0))[None].repeat(len(object_points_unscaled), axis=0),
+                onp.array((255, 0, 0))[None].repeat(
+                    len(object_points_unscaled), axis=0
+                ),
                 point_size=0.015,
             )
 
@@ -355,7 +390,7 @@ def make_world_collision_constraint(
     Args:
         robot: PyRoki robot model.
         robot_coll: Robot collision model.
-        world_geom: World collision geometry.
+        world_geom: World collision geometry (unscaled - will be scaled by var_scale).
 
     Returns:
         A jaxls.Cost.factory-decorated function with constraint_geq_zero.
@@ -366,10 +401,23 @@ def make_world_collision_constraint(
         vals: jaxls.VarValues,
         joint_var: jaxls.Var[jax.Array],
         var_T: jaxls.SE3Var,
+        var_scale: ScaleVar,
     ) -> jax.Array:
         cfg = vals[joint_var]
         T_world_root = vals[var_T]
-        world_geom_in_root = world_geom.transform(T_world_root.inverse())
+        scale = vals[var_scale]
+
+        # Scale collision geometry by var_scale (both size and position)
+        scaled_pose = jaxlie.SE3.from_rotation_and_translation(
+            rotation=world_geom.pose.rotation(),
+            translation=world_geom.pose.translation() * scale,
+        )
+        scaled_geom = world_geom.__class__(
+            pose=scaled_pose,
+            size=world_geom.size * scale,
+        )
+
+        world_geom_in_root = scaled_geom.transform(T_world_root.inverse())
         dist = robot_coll.compute_world_collision_distance(
             robot, cfg, world_geom_in_root
         )
@@ -382,7 +430,7 @@ def make_world_collision_penalty(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_geom: pk.collision.CollGeom,
-    margin: float = 0.02,
+    margin: float = 0.00,
     penalty_weight: float = 50.0,
 ):
     """Factory for world collision penalty (soft cost for trajectory optimization).
@@ -390,7 +438,7 @@ def make_world_collision_penalty(
     Args:
         robot: PyRoki robot model.
         robot_coll: Robot collision model.
-        world_geom: World collision geometry.
+        world_geom: World collision geometry (unscaled - will be scaled by var_scale).
         margin: Distance margin for penalty activation.
         penalty_weight: Weight for the penalty term.
 
@@ -403,11 +451,23 @@ def make_world_collision_penalty(
         vals: jaxls.VarValues,
         joint_var: jaxls.Var[jax.Array],
         var_Ts_world_root: jaxls.SE3Var,
+        var_scale: ScaleVar,
     ) -> jax.Array:
         cfg = vals[joint_var]
         Ts_world_root = vals[var_Ts_world_root]
+        scale = vals[var_scale]
 
-        world_geom_in_root = world_geom.transform(Ts_world_root.inverse())
+        # Scale collision geometry by var_scale (both size and position)
+        scaled_pose = jaxlie.SE3.from_rotation_and_translation(
+            rotation=world_geom.pose.rotation(),
+            translation=world_geom.pose.translation() * scale,
+        )
+        scaled_geom = world_geom.__class__(
+            pose=scaled_pose,
+            size=world_geom.size * scale,
+        )
+
+        world_geom_in_root = scaled_geom.transform(Ts_world_root.inverse())
         dist = robot_coll.compute_world_collision_distance(
             robot, cfg, world_geom_in_root
         )
@@ -543,7 +603,7 @@ def solve_single_frame_ik(
     # World collision costs (hard constraint for IK)
     for world_coll in world_coll_list:
         world_coll_cost = make_world_collision_constraint(robot, robot_coll, world_coll)
-        costs.append(world_coll_cost(var_joints, var_T_world_root))
+        costs.append(world_coll_cost(var_joints, var_T_world_root, var_scale))
 
     # Initialize
     if prev_joints is not None:
@@ -835,7 +895,7 @@ def solve_trajectory(
     # World collision costs (soft penalty for trajectory optimization)
     for world_coll in world_coll_list:
         world_coll_cost = make_world_collision_penalty(robot, robot_coll, world_coll)
-        costs.append(world_coll_cost(var_joints, var_Ts_world_root))
+        costs.append(world_coll_cost(var_joints, var_Ts_world_root, var_scale))
 
     # Use provided warm-start initialization
     init_Ts = jaxlie.SE3(init_Ts_wxyz_xyz)
