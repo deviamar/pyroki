@@ -45,6 +45,16 @@ class ClimbingRetargetingWeights(TypedDict):
     """Rest pose regularization weight (very small, default: 0.01)."""
     self_collision: float
     """Self-collision weight."""
+    scale_init: float
+    """Initial scale factor for mocap-to-robot scaling (default: 0.742)."""
+    scale_reg: float
+    """Scale regularization weight to keep scale near initial value."""
+
+
+# Scale factor optimization variable
+class ScaleVar(jaxls.Var[jax.Array], default_factory=lambda: jnp.array(0.742)):
+    """Optimization variable for mocap-to-robot scale factor."""
+    ...
 
 
 def main():
@@ -62,23 +72,27 @@ def main():
         urdf=urdf,
     )
 
-    # Load motion data and object
+    # Load motion data and object (unscaled for optimization)
     asset_dir = Path(__file__).parent / "retarget_helpers" / "omniretarget_climb_data"
-    motion = load_climb_motion(
-        asset_dir / "mocap_climb_seq_0_joint_positions_f900-3700.npy"
+    motion_unscaled = load_climb_motion(
+        asset_dir / "mocap_climb_seq_0_joint_positions_f900-3700.npy",
+        scale_factor=1.0,  # Load unscaled - scale will be optimized
     )
-    object_points = load_object_points(asset_dir / "multi_boxes.obj", sample_count=30)
-    object_mesh = load_object_mesh(asset_dir / "multi_boxes.obj")
+    object_points_unscaled = load_object_points(
+        asset_dir / "multi_boxes.obj", sample_count=30, scale_factor=1.0
+    )
+    # Keep collision mesh at reference scale (0.742) for collision detection
+    object_mesh = load_object_mesh(asset_dir / "multi_boxes.obj", scale_factor=0.742)
 
     # Subsample trajectory for faster optimization
     subsample_factor = 1
-    motion = motion[::subsample_factor]
+    motion_unscaled = motion_unscaled[::subsample_factor]
 
-    num_timesteps = motion.shape[0]
+    num_timesteps = motion_unscaled.shape[0]
     print(
-        f"Loaded motion with {num_timesteps} timesteps (subsampled {subsample_factor}x), {motion.shape[1]} joints"
+        f"Loaded motion with {num_timesteps} timesteps (subsampled {subsample_factor}x), {motion_unscaled.shape[1]} joints"
     )
-    print(f"Object points shape: {object_points.shape}")
+    print(f"Object points shape: {object_points_unscaled.shape}")
 
     # Get retarget indices and local offsets.
     mocap_indices, g1_link_indices, local_offsets = get_climb_retarget_indices(robot)
@@ -136,38 +150,42 @@ def main():
             pose_smoothness=1.0,
             rest=0.1,
             self_collision=0.5,
+            scale_init=0.742,  # Initial scale factor
+            scale_reg=0.1,  # Scale regularization weight
         ),  # type: ignore
     )
     rerun_button = server.gui.add_button("Retarget Trajectory")
+    scale_label = server.gui.add_text("Optimized scale", initial_value="--", disabled=True)
 
     # Precompute interaction mesh (must be done outside JIT)
     n_robot_pts = len(mocap_indices)
-    n_obj_pts = object_points.shape[0]
+    n_obj_pts = object_points_unscaled.shape[0]
     n_total_pts = n_robot_pts + n_obj_pts
 
-    # Build interaction mesh from first frame
-    demo_robot_pts = motion[0, mocap_indices]
+    # Build interaction mesh from first frame (using unscaled data)
+    demo_robot_pts = motion_unscaled[0, mocap_indices]
     all_vertices_np = onp.concatenate(
-        [onp.array(demo_robot_pts), onp.array(object_points)], axis=0
+        [onp.array(demo_robot_pts), onp.array(object_points_unscaled)], axis=0
     )
     _, tetrahedra = create_interaction_mesh(all_vertices_np)
     adj_list = get_adjacency_list(tetrahedra, n_total_pts)
     adj_matrix = adjacency_list_to_matrix(adj_list, n_total_pts)
 
-    # Precompute target Laplacian coordinates for each frame
-    def compute_target_lap(keypoints_frame):
+    # Precompute target Laplacian coordinates for each frame (unscaled)
+    def compute_target_lap(keypoints_frame: jnp.ndarray) -> jnp.ndarray:
         robot_pts = keypoints_frame[mocap_indices]
-        all_pts = jnp.concatenate([robot_pts, object_points], axis=0)
+        all_pts = jnp.concatenate([robot_pts, object_points_unscaled], axis=0)
         return calculate_laplacian_coordinates_vectorized(all_pts, adj_matrix)
 
-    target_laplacians = jax.vmap(compute_target_lap)(motion)
-    assert target_laplacians.shape == (num_timesteps, n_total_pts, 3)
+    target_laplacians_unscaled = jax.vmap(compute_target_lap)(motion_unscaled)
+    assert target_laplacians_unscaled.shape == (num_timesteps, n_total_pts, 3)
 
     # Get the current robot status, step-by-step.
     list_T_world_root, list_joints = [], []
+    current_scale = 0.742  # Will be updated by optimization
 
     def retarget_trajectory():
-        nonlocal list_T_world_root, list_joints
+        nonlocal list_T_world_root, list_joints, current_scale
 
         with server.atomic():
             # Temporarily disable weight tuning during solve.
@@ -176,17 +194,17 @@ def main():
             rerun_button.disabled = True
 
         # Compute warm-start initialization via sequential IK on key frames
-        init_Ts_wxyz_xyz, init_joints_warmstart = compute_warmstart_initialization(
+        init_Ts_wxyz_xyz, init_joints_warmstart, init_scale = compute_warmstart_initialization(
             robot=robot,
             robot_coll=robot_coll,
             world_coll_list=[coll_box],
-            target_laplacians=target_laplacians,
-            object_points=object_points,
+            target_laplacians_unscaled=target_laplacians_unscaled,
+            object_points_unscaled=object_points_unscaled,
             g1_link_indices=g1_link_indices,
             local_offsets=local_offsets,
             adj_matrix=adj_matrix,
             weights=weights.get_weights(),  # type: ignore
-            motion=motion,
+            motion_unscaled=motion_unscaled,
             mocap_indices=mocap_indices,
             keyframe_interval=12,  # Reduced from 50 due to 4x subsampling
         )
@@ -194,20 +212,25 @@ def main():
         print("Solving trajectory optimization (all timesteps simultaneously)...")
 
         # Single trajectory optimization call
-        Ts_world_root, joints = solve_trajectory(
+        Ts_world_root, joints, final_scale = solve_trajectory(
             robot=robot,
             robot_coll=robot_coll,
             world_coll_list=[coll_box],
-            target_laplacians=target_laplacians,
-            object_points=object_points,
+            target_laplacians_unscaled=target_laplacians_unscaled,
+            object_points_unscaled=object_points_unscaled,
             g1_link_indices=g1_link_indices,
             local_offsets=local_offsets,
             adj_matrix=adj_matrix,
             weights=weights.get_weights(),  # type: ignore
             init_Ts_wxyz_xyz=init_Ts_wxyz_xyz,
             init_joints=init_joints_warmstart,
+            init_scale=init_scale,
         )
-        jax.block_until_ready((Ts_world_root, joints))
+        jax.block_until_ready((Ts_world_root, joints, final_scale))
+
+        # Store the optimized scale
+        current_scale = float(final_scale)
+        print(f"Optimized scale: {current_scale:.4f}")
 
         # Convert to lists for playback
         list_T_world_root = [
@@ -225,6 +248,8 @@ def main():
             for handle in weights._weight_handles.values():
                 handle.disabled = False
             rerun_button.disabled = False
+            # Update scale display
+            scale_label.value = f"{current_scale:.4f}"
 
     retarget_trajectory()
     rerun_button.on_click(lambda _: retarget_trajectory())
@@ -238,8 +263,8 @@ def main():
             base_frame.position = onp.array(list_T_world_root[tstep].wxyz_xyz[4:])
             urdf_vis.update_cfg(onp.array(list_joints[tstep]))
 
-            # Show target keypoints
-            keypoints_to_show = motion[tstep, onp.array(mocap_indices)]
+            # Show target keypoints (scaled by optimized scale for visualization)
+            keypoints_to_show = motion_unscaled[tstep, onp.array(mocap_indices)] * current_scale
             server.scene.add_point_cloud(
                 "/target_keypoints",
                 onp.array(keypoints_to_show),
@@ -247,11 +272,11 @@ def main():
                 point_size=0.02,
             )
 
-            # Show object sample points
+            # Show object sample points (scaled by optimized scale)
             server.scene.add_point_cloud(
                 "/object_points",
-                onp.array(object_points),
-                onp.array((255, 0, 0))[None].repeat(len(object_points), axis=0),
+                onp.array(object_points_unscaled) * current_scale,
+                onp.array((255, 0, 0))[None].repeat(len(object_points_unscaled), axis=0),
                 point_size=0.015,
             )
 
@@ -267,19 +292,20 @@ def make_laplacian_cost(
     robot: pk.Robot,
     g1_link_indices: jnp.ndarray,
     local_offsets: jnp.ndarray,
-    object_points: jnp.ndarray,
+    object_points_unscaled: jnp.ndarray,
     adj_matrix: jnp.ndarray,
 ):
-    """Factory for Laplacian mesh deformation cost.
+    """Factory for Laplacian mesh deformation cost with optimizable scale.
 
     Creates a cost that penalizes deviation from target Laplacian coordinates,
-    which preserves the local structure of the interaction mesh.
+    which preserves the local structure of the interaction mesh. The scale factor
+    is applied to both object points and target Laplacian (using linearity).
 
     Args:
         robot: PyRoki robot model.
         g1_link_indices: Robot link indices for keypoints.
         local_offsets: (N, 3) local-frame offsets for each keypoint.
-        object_points: (num_obj_points, 3) sampled object surface points.
+        object_points_unscaled: (num_obj_points, 3) unscaled object surface points.
         adj_matrix: (n_total, n_total) precomputed adjacency matrix.
 
     Returns:
@@ -291,11 +317,13 @@ def make_laplacian_cost(
         var_values: jaxls.VarValues,
         var_T: jaxls.SE3Var,
         var_cfg: jaxls.Var[jnp.ndarray],
-        target_laplacian: jnp.ndarray,
+        var_scale: ScaleVar,
+        target_laplacian_unscaled: jnp.ndarray,
         weight: float,
     ) -> jax.Array:
         robot_cfg = var_values[var_cfg]
         T_world_root = var_values[var_T]
+        scale = var_values[var_scale]
 
         T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
         T_world_link = T_world_root @ T_root_link
@@ -304,10 +332,15 @@ def make_laplacian_cost(
         rotated_offsets = T_keypoint_links.rotation() @ local_offsets
         robot_keypoints = T_keypoint_links.translation() + rotated_offsets
 
-        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
+        # Scale object points by the optimizable scale factor
+        scaled_object_points = object_points_unscaled * scale
+        vertices = jnp.concatenate([robot_keypoints, scaled_object_points], axis=-2)
         current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
 
-        return ((current_lap - target_laplacian) * weight).flatten()
+        # Scale target Laplacian (Laplacian coordinates scale linearly)
+        scaled_target_lap = target_laplacian_unscaled * scale
+
+        return ((current_lap - scaled_target_lap) * weight).flatten()
 
     return laplacian_cost
 
@@ -385,13 +418,35 @@ def make_world_collision_penalty(
     return world_collision_penalty
 
 
+def make_scale_regularization():
+    """Factory for scale regularization cost.
+
+    Penalizes deviation of scale from initial value to prevent drift.
+
+    Returns:
+        A jaxls.Cost.factory-decorated function.
+    """
+
+    @jaxls.Cost.factory
+    def scale_regularization(
+        var_values: jaxls.VarValues,
+        var_scale: ScaleVar,
+        init_scale: float,
+        weight: float,
+    ) -> jax.Array:
+        scale = var_values[var_scale]
+        return jnp.array([(scale - init_scale) * weight])
+
+    return scale_regularization
+
+
 @jdc.jit
 def solve_single_frame_ik(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_coll_list: list[pk.collision.CollGeom],
-    target_laplacian: jnp.ndarray,
-    object_points: jnp.ndarray,
+    target_laplacian_unscaled: jnp.ndarray,
+    object_points_unscaled: jnp.ndarray,
     g1_link_indices: jnp.ndarray,
     local_offsets: jnp.ndarray,
     adj_matrix: jnp.ndarray,
@@ -399,15 +454,16 @@ def solve_single_frame_ik(
     init_translation: jnp.ndarray,
     prev_T_world_root: jaxlie.SE3 | None,
     prev_joints: jnp.ndarray | None,
-) -> tuple[jaxlie.SE3, jnp.ndarray]:
-    """Solve single-frame IK for warm-start initialization.
+    prev_scale: jnp.ndarray | None,
+) -> tuple[jaxlie.SE3, jnp.ndarray, jnp.ndarray]:
+    """Solve single-frame IK for warm-start initialization with scale optimization.
 
     Args:
         robot: PyRoki robot model.
         robot_coll: Robot collision model.
         world_coll_list: List of world collision geometries.
-        target_laplacian: (n_total, 3) target Laplacian for this frame.
-        object_points: (num_obj_points, 3) sampled object surface points.
+        target_laplacian_unscaled: (n_total, 3) unscaled target Laplacian for this frame.
+        object_points_unscaled: (num_obj_points, 3) unscaled object surface points.
         g1_link_indices: Robot link indices for keypoints.
         local_offsets: (N, 3) local-frame offsets for each keypoint.
         adj_matrix: (n_total, n_total) precomputed adjacency matrix.
@@ -415,17 +471,20 @@ def solve_single_frame_ik(
         init_translation: (3,) initial root translation from mocap centroid.
         prev_T_world_root: Previous frame's root transform (for warm-start).
         prev_joints: Previous frame's joint config (for warm-start).
+        prev_scale: Previous frame's scale (for warm-start).
 
     Returns:
-        Tuple of (T_world_root, joints) for this frame.
+        Tuple of (T_world_root, joints, scale) for this frame.
     """
     var_joints = robot.joint_var_cls(0)
     var_T_world_root = jaxls.SE3Var(0)
+    var_scale = ScaleVar(0)
 
-    # Create laplacian cost using shared factory
+    # Create cost factories
     laplacian_cost = make_laplacian_cost(
-        robot, g1_link_indices, local_offsets, object_points, adj_matrix
+        robot, g1_link_indices, local_offsets, object_points_unscaled, adj_matrix
     )
+    scale_regularization = make_scale_regularization()
 
     # Smoothness to previous frame (if available)
     @jaxls.Cost.factory
@@ -454,8 +513,13 @@ def solve_single_frame_ik(
     # Build costs
     costs: list[jaxls.Cost] = [
         laplacian_cost(
-            var_T_world_root, var_joints, target_laplacian, weights["laplacian"]
+            var_T_world_root,
+            var_joints,
+            var_scale,
+            target_laplacian_unscaled,
+            weights["laplacian"],
         ),
+        scale_regularization(var_scale, weights["scale_init"], weights["scale_reg"]),
         smoothness_to_prev_joints(var_joints),
         smoothness_to_prev_pose(var_T_world_root),
         pk.costs.rest_cost(
@@ -495,10 +559,15 @@ def solve_single_frame_ik(
             translation=init_translation,
         )
 
+    if prev_scale is not None:
+        init_scale = prev_scale
+    else:
+        init_scale = jnp.array(weights["scale_init"])
+
     solution = (
         jaxls.LeastSquaresProblem(
             costs=costs,
-            variables=[var_joints, var_T_world_root],
+            variables=[var_joints, var_T_world_root, var_scale],
         )
         .analyze()
         .solve(
@@ -507,37 +576,38 @@ def solve_single_frame_ik(
                 [
                     var_joints.with_value(init_joint_cfg),
                     var_T_world_root.with_value(init_T),
+                    var_scale.with_value(init_scale),
                 ]
             ),
         )
     )
 
-    return solution[var_T_world_root], solution[var_joints]
+    return solution[var_T_world_root], solution[var_joints], solution[var_scale]
 
 
 def compute_warmstart_initialization(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_coll_list: list[pk.collision.CollGeom],
-    target_laplacians: jnp.ndarray,
-    object_points: jnp.ndarray,
+    target_laplacians_unscaled: jnp.ndarray,
+    object_points_unscaled: jnp.ndarray,
     g1_link_indices: jnp.ndarray,
     local_offsets: jnp.ndarray,
     adj_matrix: jnp.ndarray,
     weights: ClimbingRetargetingWeights,
-    motion: jnp.ndarray,
+    motion_unscaled: jnp.ndarray,
     mocap_indices: jnp.ndarray,
     keyframe_interval: int = 50,
-) -> tuple[jnp.ndarray, jnp.ndarray]:
-    """Compute warm-start initialization by solving IK for key frames.
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Compute warm-start initialization by solving IK for key frames with scale.
 
     Args:
         keyframe_interval: Solve IK every N frames.
 
     Returns:
-        Tuple of (init_Ts_wxyz_xyz, init_joints) arrays for all timesteps.
+        Tuple of (init_Ts_wxyz_xyz, init_joints, init_scale) for all timesteps.
     """
-    timesteps = target_laplacians.shape[0]
+    timesteps = target_laplacians_unscaled.shape[0]
 
     # Select key frame indices
     keyframe_indices = list(range(0, timesteps, keyframe_interval))
@@ -546,23 +616,25 @@ def compute_warmstart_initialization(
 
     print(f"Solving IK for {len(keyframe_indices)} key frames...", flush=True)
 
-    # Compute mocap centroids for initialization
-    keypoint_positions = motion[:, mocap_indices]
-    centroids = keypoint_positions.mean(axis=1)
+    # Compute mocap centroids for initialization (scaled by initial scale)
+    keypoint_positions = motion_unscaled[:, mocap_indices]
+    centroids = keypoint_positions.mean(axis=1) * weights["scale_init"]
 
     # Solve key frames sequentially
     keyframe_Ts: list[jaxlie.SE3] = []
     keyframe_joints: list[jnp.ndarray] = []
+    keyframe_scales: list[jnp.ndarray] = []
     prev_T: jaxlie.SE3 | None = None
     prev_joints: jnp.ndarray | None = None
+    prev_scale: jnp.ndarray | None = None
 
     for i, idx in enumerate(keyframe_indices):
-        T, joints = solve_single_frame_ik(
+        T, joints, scale = solve_single_frame_ik(
             robot=robot,
             robot_coll=robot_coll,
             world_coll_list=world_coll_list,
-            target_laplacian=target_laplacians[idx],
-            object_points=object_points,
+            target_laplacian_unscaled=target_laplacians_unscaled[idx],
+            object_points_unscaled=object_points_unscaled,
             g1_link_indices=g1_link_indices,
             local_offsets=local_offsets,
             adj_matrix=adj_matrix,
@@ -570,14 +642,25 @@ def compute_warmstart_initialization(
             init_translation=centroids[idx],
             prev_T_world_root=prev_T,
             prev_joints=prev_joints,
+            prev_scale=prev_scale,
         )
         keyframe_Ts.append(T)
         keyframe_joints.append(joints)
+        keyframe_scales.append(scale)
         prev_T = T
         prev_joints = joints
+        prev_scale = scale
 
         if (i + 1) % 5 == 0 or i == len(keyframe_indices) - 1:
-            print(f"  Solved {i + 1}/{len(keyframe_indices)} key frames", flush=True)
+            print(
+                f"  Solved {i + 1}/{len(keyframe_indices)} key frames "
+                f"(scale={float(scale):.4f})",
+                flush=True,
+            )
+
+    # Use final keyframe scale as initialization for trajectory optimization
+    init_scale = keyframe_scales[-1]
+    print(f"Warm-start scale: {float(init_scale):.4f}", flush=True)
 
     # Interpolate between key frames
     init_joints = onp.zeros((timesteps, robot.joint_var_cls.default_factory().shape[0]))
@@ -613,7 +696,7 @@ def compute_warmstart_initialization(
             init_Ts_wxyz_xyz[start_idx + j] = onp.concatenate([wxyz, trans])
 
     print("Warm-start initialization complete!", flush=True)
-    return jnp.array(init_Ts_wxyz_xyz), jnp.array(init_joints)
+    return jnp.array(init_Ts_wxyz_xyz), jnp.array(init_joints), init_scale
 
 
 @jdc.jit
@@ -621,51 +704,58 @@ def solve_trajectory(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_coll_list: list[pk.collision.CollGeom],
-    target_laplacians: jnp.ndarray,
-    object_points: jnp.ndarray,
+    target_laplacians_unscaled: jnp.ndarray,
+    object_points_unscaled: jnp.ndarray,
     g1_link_indices: jnp.ndarray,
     local_offsets: jnp.ndarray,
     adj_matrix: jnp.ndarray,
     weights: ClimbingRetargetingWeights,
     init_Ts_wxyz_xyz: jnp.ndarray,
     init_joints: jnp.ndarray,
-) -> tuple[jaxlie.SE3, jnp.ndarray]:
-    """Solve trajectory optimization for climbing retargeting.
+    init_scale: jnp.ndarray,
+) -> tuple[jaxlie.SE3, jnp.ndarray, jnp.ndarray]:
+    """Solve trajectory optimization for climbing retargeting with scale optimization.
 
     All timesteps are optimized simultaneously (not sequentially).
+    The scale factor is a single global variable optimized across all timesteps.
 
     Args:
         robot: PyRoki robot model.
         robot_coll: Robot collision model.
         world_coll_list: List of world collision geometries.
-        target_laplacians: (T, n_total, 3) target Laplacian coordinates for all frames.
-        object_points: (num_obj_points, 3) sampled object surface points.
+        target_laplacians_unscaled: (T, n_total, 3) unscaled target Laplacian coordinates.
+        object_points_unscaled: (num_obj_points, 3) unscaled object surface points.
         g1_link_indices: Corresponding G1 robot link indices.
         local_offsets: (N, 3) local-frame offsets for each keypoint.
         adj_matrix: (n_total, n_total) precomputed adjacency matrix.
         weights: Retargeting weights.
         init_Ts_wxyz_xyz: (T, 7) warm-start root transforms.
         init_joints: (T, num_joints) warm-start joint configurations.
+        init_scale: Warm-start scale factor.
 
     Returns:
-        Tuple of (Ts_world_root, joints) for all frames.
+        Tuple of (Ts_world_root, joints, scale) for all frames.
         - Ts_world_root: SE3 with batch shape (T,)
         - joints: (T, num_joints) array
+        - scale: Optimized scale factor
     """
-    timesteps = target_laplacians.shape[0]
+    timesteps = target_laplacians_unscaled.shape[0]
 
     # Trajectory variables for all timesteps
     var_joints = robot.joint_var_cls(jnp.arange(timesteps))
     var_Ts_world_root = jaxls.SE3Var(jnp.arange(timesteps))
+    # Single global scale variable (shared across all timesteps)
+    var_scale = ScaleVar(0)
 
     # Batch robot for trajectory (required by pk.costs functions)
     robot_batched = jax.tree.map(lambda x: x[None], robot)
     robot_coll_batched = jax.tree.map(lambda x: x[None], robot_coll)
 
-    # Create laplacian cost using shared factory
+    # Create cost factories
     laplacian_cost = make_laplacian_cost(
-        robot, g1_link_indices, local_offsets, object_points, adj_matrix
+        robot, g1_link_indices, local_offsets, object_points_unscaled, adj_matrix
     )
+    scale_regularization = make_scale_regularization()
 
     # Cost: Joint smoothness between adjacent timesteps
     @jaxls.Cost.factory
@@ -702,10 +792,16 @@ def solve_trajectory(
 
     # Build cost list
     costs: list[jaxls.Cost] = [
-        # Laplacian cost for all timesteps
+        # Laplacian cost for all timesteps (with scale variable)
         laplacian_cost(
-            var_Ts_world_root, var_joints, target_laplacians, weights["laplacian"]
+            var_Ts_world_root,
+            var_joints,
+            var_scale,
+            target_laplacians_unscaled,
+            weights["laplacian"],
         ),
+        # Scale regularization (single cost for the global scale)
+        scale_regularization(var_scale, weights["scale_init"], weights["scale_reg"]),
         # Joint smoothness between adjacent timesteps
         smoothness_to_prev_joints(
             robot.joint_var_cls(jnp.arange(1, timesteps)),
@@ -748,7 +844,7 @@ def solve_trajectory(
     solution = (
         jaxls.LeastSquaresProblem(
             costs=costs,
-            variables=[var_joints, var_Ts_world_root],
+            variables=[var_joints, var_Ts_world_root, var_scale],
         )
         .analyze()
         .solve(
@@ -757,12 +853,13 @@ def solve_trajectory(
                 [
                     var_joints.with_value(init_joints),
                     var_Ts_world_root.with_value(init_Ts),
+                    var_scale.with_value(init_scale),
                 ]
             ),
         )
     )
 
-    return solution[var_Ts_world_root], solution[var_joints]
+    return solution[var_Ts_world_root], solution[var_joints], solution[var_scale]
 
 
 if __name__ == "__main__":
