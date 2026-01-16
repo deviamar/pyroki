@@ -208,7 +208,6 @@ def main():
             init_joints=init_joints_warmstart,
         )
         jax.block_until_ready((Ts_world_root, joints))
-        # Ts_world_root, joints = jaxlie.SE3(init_Ts_wxyz_xyz), init_joints_warmstart
 
         # Convert to lists for playback
         list_T_world_root = [
@@ -259,6 +258,141 @@ def main():
         time.sleep(1 / 30)
 
 
+# =============================================================================
+# Shared Cost Factories
+# =============================================================================
+
+
+def make_laplacian_cost(
+    robot: pk.Robot,
+    g1_link_indices: jnp.ndarray,
+    local_offsets: jnp.ndarray,
+    object_points: jnp.ndarray,
+    adj_matrix: jnp.ndarray,
+):
+    """Factory for Laplacian mesh deformation cost.
+
+    Creates a cost that penalizes deviation from target Laplacian coordinates,
+    which preserves the local structure of the interaction mesh.
+
+    Args:
+        robot: PyRoki robot model.
+        g1_link_indices: Robot link indices for keypoints.
+        local_offsets: (N, 3) local-frame offsets for each keypoint.
+        object_points: (num_obj_points, 3) sampled object surface points.
+        adj_matrix: (n_total, n_total) precomputed adjacency matrix.
+
+    Returns:
+        A jaxls.Cost.factory-decorated function.
+    """
+
+    @jaxls.Cost.factory
+    def laplacian_cost(
+        var_values: jaxls.VarValues,
+        var_T: jaxls.SE3Var,
+        var_cfg: jaxls.Var[jnp.ndarray],
+        target_laplacian: jnp.ndarray,
+        weight: float,
+    ) -> jax.Array:
+        robot_cfg = var_values[var_cfg]
+        T_world_root = var_values[var_T]
+
+        T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
+        T_world_link = T_world_root @ T_root_link
+
+        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[..., g1_link_indices, :])
+        rotated_offsets = T_keypoint_links.rotation() @ local_offsets
+        robot_keypoints = T_keypoint_links.translation() + rotated_offsets
+
+        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
+        current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
+
+        return ((current_lap - target_laplacian) * weight).flatten()
+
+    return laplacian_cost
+
+
+def make_world_collision_constraint(
+    robot: pk.Robot,
+    robot_coll: pk.collision.RobotCollision,
+    world_geom: pk.collision.CollGeom,
+):
+    """Factory for world collision constraint (hard constraint for IK).
+
+    Args:
+        robot: PyRoki robot model.
+        robot_coll: Robot collision model.
+        world_geom: World collision geometry.
+
+    Returns:
+        A jaxls.Cost.factory-decorated function with constraint_geq_zero.
+    """
+
+    @jaxls.Cost.factory(kind="constraint_geq_zero")
+    def world_collision_constraint(
+        vals: jaxls.VarValues,
+        joint_var: jaxls.Var[jax.Array],
+        var_T: jaxls.SE3Var,
+    ) -> jax.Array:
+        cfg = vals[joint_var]
+        T_world_root = vals[var_T]
+        world_geom_in_root = world_geom.transform(T_world_root.inverse())
+        dist = robot_coll.compute_world_collision_distance(
+            robot, cfg, world_geom_in_root
+        )
+        return dist.flatten()
+
+    return world_collision_constraint
+
+
+def make_world_collision_penalty(
+    robot: pk.Robot,
+    robot_coll: pk.collision.RobotCollision,
+    world_geom: pk.collision.CollGeom,
+    margin: float = 0.02,
+    penalty_weight: float = 50.0,
+):
+    """Factory for world collision penalty (soft cost for trajectory optimization).
+
+    Args:
+        robot: PyRoki robot model.
+        robot_coll: Robot collision model.
+        world_geom: World collision geometry.
+        margin: Distance margin for penalty activation.
+        penalty_weight: Weight for the penalty term.
+
+    Returns:
+        A jaxls.Cost.factory-decorated function.
+    """
+
+    @jaxls.Cost.factory
+    def world_collision_penalty(
+        vals: jaxls.VarValues,
+        joint_var: jaxls.Var[jax.Array],
+        var_Ts_world_root: jaxls.SE3Var,
+    ) -> jax.Array:
+        cfg = vals[joint_var]
+        Ts_world_root = vals[var_Ts_world_root]
+
+        is_batched = cfg.ndim > 1
+
+        def compute_dist_single(cfg_single, T_world_root_single):
+            world_geom_in_root = world_geom.transform(T_world_root_single.inverse())
+            return robot_coll.compute_world_collision_distance(
+                robot, cfg_single, world_geom_in_root
+            )
+
+        if is_batched:
+            dist = jax.vmap(compute_dist_single)(cfg, Ts_world_root)
+        else:
+            dist = compute_dist_single(cfg, Ts_world_root)
+
+        penalty = jnp.maximum(margin - dist, 0.0) * penalty_weight
+        return penalty.flatten()
+
+    return world_collision_penalty
+
+
 @jdc.jit
 def solve_single_frame_ik(
     robot: pk.Robot,
@@ -296,27 +430,10 @@ def solve_single_frame_ik(
     var_joints = robot.joint_var_cls(0)
     var_T_world_root = jaxls.SE3Var(0)
 
-    # Laplacian cost for this frame
-    @jaxls.Cost.factory
-    def laplacian_cost_single(
-        var_values: jaxls.VarValues,
-        var_T: jaxls.SE3Var,
-        var_cfg: jaxls.Var[jnp.ndarray],
-    ) -> jax.Array:
-        robot_cfg = var_values[var_cfg]
-        T_world_root = var_values[var_T]
-
-        T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
-        T_world_link = T_world_root @ T_root_link
-
-        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[..., g1_link_indices, :])
-        rotated_offsets = T_keypoint_links.rotation() @ local_offsets
-        robot_keypoints = T_keypoint_links.translation() + rotated_offsets
-
-        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
-        current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
-
-        return ((current_lap - target_laplacian) * weights["laplacian"]).flatten()
+    # Create laplacian cost using shared factory
+    laplacian_cost = make_laplacian_cost(
+        robot, g1_link_indices, local_offsets, object_points, adj_matrix
+    )
 
     # Smoothness to previous frame (if available)
     @jaxls.Cost.factory
@@ -342,27 +459,11 @@ def solve_single_frame_ik(
             * weights["pose_smoothness"]
         ).flatten()
 
-    # World collision (soft cost for IK, not hard constraint)
-    def make_world_collision_cost(world_geom: pk.collision.CollGeom):
-        @jaxls.Cost.factory(kind="constraint_geq_zero")
-        def world_collision_cost(
-            vals: jaxls.VarValues,
-            joint_var: jaxls.Var[jax.Array],
-            var_T: jaxls.SE3Var,
-        ) -> jax.Array:
-            cfg = vals[joint_var]
-            T_world_root = vals[var_T]
-            world_geom_in_root = world_geom.transform(T_world_root.inverse())
-            dist = robot_coll.compute_world_collision_distance(
-                robot, cfg, world_geom_in_root
-            )
-            return dist.flatten()
-
-        return world_collision_cost
-
     # Build costs
     costs: list[jaxls.Cost] = [
-        laplacian_cost_single(var_T_world_root, var_joints),
+        laplacian_cost(
+            var_T_world_root, var_joints, target_laplacian, weights["laplacian"]
+        ),
         smoothness_to_prev_joints(var_joints),
         smoothness_to_prev_pose(var_T_world_root),
         pk.costs.rest_cost(
@@ -383,11 +484,10 @@ def solve_single_frame_ik(
         ),
     ]
 
-    # World collision costs
+    # World collision costs (hard constraint for IK)
     for world_coll in world_coll_list:
-        costs.append(
-            make_world_collision_cost(world_coll)(var_joints, var_T_world_root)
-        )
+        world_coll_cost = make_world_collision_constraint(robot, robot_coll, world_coll)
+        costs.append(world_coll_cost(var_joints, var_T_world_root))
 
     # Initialize
     if prev_joints is not None:
@@ -570,29 +670,10 @@ def solve_trajectory(
     robot_batched = jax.tree.map(lambda x: x[None], robot)
     robot_coll_batched = jax.tree.map(lambda x: x[None], robot_coll)
 
-    # Cost: Laplacian mesh deformation for all timesteps
-    @jaxls.Cost.factory
-    def laplacian_cost(
-        var_values: jaxls.VarValues,
-        var_Ts_world_root: jaxls.SE3Var,
-        var_robot_cfg: jaxls.Var[jnp.ndarray],
-        target_laplacian: jnp.ndarray,
-    ) -> jax.Array:
-        """Laplacian mesh deformation cost for all timesteps."""
-        robot_cfg = var_values[var_robot_cfg]
-        T_world_root = var_values[var_Ts_world_root]
-
-        T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
-        T_world_link = T_world_root @ T_root_link
-
-        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[..., g1_link_indices, :])
-        rotated_offsets = T_keypoint_links.rotation() @ local_offsets
-        robot_keypoints = T_keypoint_links.translation() + rotated_offsets
-
-        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
-        current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
-
-        return ((current_lap - target_laplacian) * weights["laplacian"]).flatten()
+    # Create laplacian cost using shared factory
+    laplacian_cost = make_laplacian_cost(
+        robot, g1_link_indices, local_offsets, object_points, adj_matrix
+    )
 
     # Cost: Joint smoothness between adjacent timesteps
     @jaxls.Cost.factory
@@ -627,47 +708,12 @@ def solve_trajectory(
             * weights["pose_smoothness"]
         ).flatten()
 
-    # Factory for world collision cost (uses closure to capture world_geom)
-    def make_world_collision_cost(world_geom: pk.collision.CollGeom):
-        """Create a soft world collision cost for the given geometry."""
-
-        @jaxls.Cost.factory
-        def world_collision_cost(
-            vals: jaxls.VarValues,
-            joint_var: jaxls.Var[jax.Array],
-            var_Ts_world_root: jaxls.SE3Var,
-        ) -> jax.Array:
-            """World collision cost - soft penalty, handles both batched and unbatched."""
-            cfg = vals[joint_var]
-            Ts_world_root = vals[var_Ts_world_root]
-
-            # Check if we have a batch dimension
-            is_batched = cfg.ndim > 1
-
-            def compute_dist_single(cfg_single, T_world_root_single):
-                world_geom_in_root = world_geom.transform(T_world_root_single.inverse())
-                return robot_coll.compute_world_collision_distance(
-                    robot, cfg_single, world_geom_in_root
-                )
-
-            if is_batched:
-                # Batched: vmap over first dimension
-                dist = jax.vmap(compute_dist_single)(cfg, Ts_world_root)
-            else:
-                # Unbatched: direct computation
-                dist = compute_dist_single(cfg, Ts_world_root)
-
-            # Soft penalty: penalize when dist < margin
-            margin = 0.02
-            penalty = jnp.maximum(margin - dist, 0.0) * 50.0
-            return penalty.flatten()
-
-        return world_collision_cost
-
     # Build cost list
     costs: list[jaxls.Cost] = [
         # Laplacian cost for all timesteps
-        laplacian_cost(var_Ts_world_root, var_joints, target_laplacians),
+        laplacian_cost(
+            var_Ts_world_root, var_joints, target_laplacians, weights["laplacian"]
+        ),
         # Joint smoothness between adjacent timesteps
         smoothness_to_prev_joints(
             robot.joint_var_cls(jnp.arange(1, timesteps)),
@@ -698,11 +744,10 @@ def solve_trajectory(
         ),
     ]
 
-    # World collision costs
+    # World collision costs (soft penalty for trajectory optimization)
     for world_coll in world_coll_list:
-        costs.append(
-            make_world_collision_cost(world_coll)(var_joints, var_Ts_world_root)
-        )
+        world_coll_cost = make_world_collision_penalty(robot, robot_coll, world_coll)
+        costs.append(world_coll_cost(var_joints, var_Ts_world_root))
 
     # Use provided warm-start initialization
     init_Ts = jaxlie.SE3(init_Ts_wxyz_xyz)
