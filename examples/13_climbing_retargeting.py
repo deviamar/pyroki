@@ -1,13 +1,14 @@
-"""Climbing Retargeting (DiffIK)
+"""Climbing Retargeting (Trajectory Optimization)
 
-Retarget motion to G1 humanoid using Laplacian mesh deformation with diffIK.
+Retarget motion to G1 humanoid using Laplacian mesh deformation with trajectory optimization.
+All timesteps are optimized simultaneously (not sequentially like diffIK).
 Based on the holosoma interaction mesh retargeting approach.
 """
 
 import json
 import time
 from pathlib import Path
-from typing import Tuple, TypedDict
+from typing import TypedDict
 
 import trimesh
 import jax
@@ -19,7 +20,6 @@ import numpy as onp
 import pyroki as pk
 import viser
 from robot_descriptions.loaders.yourdfpy import load_robot_description
-import tqdm
 from viser.extras import ViserUrdf
 
 from retarget_helpers._climb_utils import (
@@ -37,10 +37,14 @@ from retarget_helpers._climb_utils import (
 class ClimbingRetargetingWeights(TypedDict):
     laplacian: float
     """Laplacian mesh deformation weight (default: 10.0 from holosoma)."""
-    smoothness: float
+    joint_smoothness: float
+    """Smoothness weight towards previous frame (default: 0.2 from holosoma)."""
+    pose_smoothness: float
     """Smoothness weight towards previous frame (default: 0.2 from holosoma)."""
     rest: float
     """Rest pose regularization weight (very small, default: 0.01)."""
+    self_collision: float
+    """Self-collision weight."""
 
 
 def main():
@@ -66,8 +70,14 @@ def main():
     object_points = load_object_points(asset_dir / "multi_boxes.obj", sample_count=30)
     object_mesh = load_object_mesh(asset_dir / "multi_boxes.obj")
 
+    # Subsample trajectory for faster optimization
+    subsample_factor = 1
+    motion = motion[::subsample_factor]
+
     num_timesteps = motion.shape[0]
-    print(f"Loaded motion with {num_timesteps} timesteps, {motion.shape[1]} joints")
+    print(
+        f"Loaded motion with {num_timesteps} timesteps (subsampled {subsample_factor}x), {motion.shape[1]} joints"
+    )
     print(f"Object points shape: {object_points.shape}")
 
     # Get retarget indices and local offsets.
@@ -121,9 +131,11 @@ def main():
     weights = pk.viewer.WeightTuner(
         server,
         ClimbingRetargetingWeights(
-            laplacian=10.0,
-            smoothness=0.2,
-            rest=0.01,
+            laplacian=3.0,
+            joint_smoothness=1.0,
+            pose_smoothness=1.0,
+            rest=0.1,
+            self_collision=0.5,
         ),  # type: ignore
     )
     rerun_button = server.gui.add_button("Retarget Trajectory")
@@ -156,7 +168,6 @@ def main():
 
     def retarget_trajectory():
         nonlocal list_T_world_root, list_joints
-        list_T_world_root, list_joints = [], []
 
         with server.atomic():
             # Temporarily disable weight tuning during solve.
@@ -164,41 +175,50 @@ def main():
                 handle.disabled = True
             rerun_button.disabled = True
 
-            tstep = timestep_slider.value = 0
+        # Compute warm-start initialization via sequential IK on key frames
+        init_Ts_wxyz_xyz, init_joints_warmstart = compute_warmstart_initialization(
+            robot=robot,
+            robot_coll=robot_coll,
+            world_coll_list=[coll_box],
+            target_laplacians=target_laplacians,
+            object_points=object_points,
+            g1_link_indices=g1_link_indices,
+            local_offsets=local_offsets,
+            adj_matrix=adj_matrix,
+            weights=weights.get_weights(),  # type: ignore
+            motion=motion,
+            mocap_indices=mocap_indices,
+            keyframe_interval=12,  # Reduced from 50 due to 4x subsampling
+        )
 
-            init_T_world_root = jaxlie.SE3.identity()
-            init_joints = jnp.array(robot.joint_var_cls.default_factory())
+        print("Solving trajectory optimization (all timesteps simultaneously)...")
 
-            for t in tqdm.trange(num_timesteps, desc="Solving frames"):
-                T_world_root_t, joints_t = solve_single_frame(
-                    robot=robot,
-                    robot_coll=robot_coll,
-                    world_coll_list=[coll_box],
-                    target_lap=target_laplacians[t],
-                    object_points=object_points,
-                    g1_link_indices=g1_link_indices,
-                    local_offsets=local_offsets,
-                    adj_matrix=adj_matrix,
-                    weights=weights.get_weights(),  # type: ignore
-                    init_joints=init_joints,
-                    init_T_world_root=init_T_world_root,
-                    prev_joints=init_joints,
-                    prev_T_world_root=init_T_world_root,
-                )
-                jax.block_until_ready((T_world_root_t, joints_t))
+        # Single trajectory optimization call
+        Ts_world_root, joints = solve_trajectory(
+            robot=robot,
+            robot_coll=robot_coll,
+            world_coll_list=[coll_box],
+            target_laplacians=target_laplacians,
+            object_points=object_points,
+            g1_link_indices=g1_link_indices,
+            local_offsets=local_offsets,
+            adj_matrix=adj_matrix,
+            weights=weights.get_weights(),  # type: ignore
+            init_Ts_wxyz_xyz=init_Ts_wxyz_xyz,
+            init_joints=init_joints_warmstart,
+        )
+        jax.block_until_ready((Ts_world_root, joints))
+        # Ts_world_root, joints = jaxlie.SE3(init_Ts_wxyz_xyz), init_joints_warmstart
 
-                # Store results.
-                list_T_world_root.append(T_world_root_t)
-                list_joints.append(joints_t)
-                init_joints = joints_t
-                init_T_world_root = T_world_root_t
+        # Convert to lists for playback
+        list_T_world_root = [
+            jaxlie.SE3(Ts_world_root.wxyz_xyz[t]) for t in range(num_timesteps)
+        ]
+        list_joints = [joints[t] for t in range(num_timesteps)]
 
-                # Update the visualization online.
-                timestep_slider.value = t
-                base_frame.wxyz = onp.array(T_world_root_t.wxyz_xyz[:4])
-                base_frame.position = onp.array(T_world_root_t.wxyz_xyz[4:])
-                urdf_vis.update_cfg(onp.array(joints_t))
+        print("Trajectory optimization complete!")
 
+        with server.atomic():
             # All results are ready; we should be able to do playback.
             playing.disabled = False
             timestep_slider.disabled = False
@@ -236,152 +256,151 @@ def main():
                 point_size=0.015,
             )
 
-        time.sleep(0.05)
+        time.sleep(1 / 30)
 
 
 @jdc.jit
-def solve_single_frame(
+def solve_single_frame_ik(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_coll_list: list[pk.collision.CollGeom],
-    target_lap: jnp.ndarray,
+    target_laplacian: jnp.ndarray,
     object_points: jnp.ndarray,
     g1_link_indices: jnp.ndarray,
     local_offsets: jnp.ndarray,
     adj_matrix: jnp.ndarray,
     weights: ClimbingRetargetingWeights,
-    init_joints: jnp.ndarray,
-    init_T_world_root: jaxlie.SE3,
-    prev_joints: jnp.ndarray,
-    prev_T_world_root: jaxlie.SE3,
+    init_translation: jnp.ndarray,
+    prev_T_world_root: jaxlie.SE3 | None,
+    prev_joints: jnp.ndarray | None,
 ) -> tuple[jaxlie.SE3, jnp.ndarray]:
-    """Solve a single frame of the climbing retargeting problem.
+    """Solve single-frame IK for warm-start initialization.
 
     Args:
         robot: PyRoki robot model.
-        target_lap: (n_total, 3) target Laplacian coordinates for this frame.
+        robot_coll: Robot collision model.
+        world_coll_list: List of world collision geometries.
+        target_laplacian: (n_total, 3) target Laplacian for this frame.
         object_points: (num_obj_points, 3) sampled object surface points.
-        g1_link_indices: Corresponding G1 robot link indices.
+        g1_link_indices: Robot link indices for keypoints.
         local_offsets: (N, 3) local-frame offsets for each keypoint.
         adj_matrix: (n_total, n_total) precomputed adjacency matrix.
         weights: Retargeting weights.
-        init_joints: Initial joint configuration (from previous frame).
-        init_T_world_root: Initial root transform (from previous frame).
-        prev_joints: Previous frame's joint configuration (for smoothness).
-        prev_T_world_root: Previous frame's root transform (for smoothness).
+        init_translation: (3,) initial root translation from mocap centroid.
+        prev_T_world_root: Previous frame's root transform (for warm-start).
+        prev_joints: Previous frame's joint config (for warm-start).
 
     Returns:
         Tuple of (T_world_root, joints) for this frame.
     """
-    # Variables for single frame (use scalar index 0)
     var_joints = robot.joint_var_cls(0)
     var_T_world_root = jaxls.SE3Var(0)
 
-    # Costs
+    # Laplacian cost for this frame
     @jaxls.Cost.factory
-    def laplacian_cost(
+    def laplacian_cost_single(
         var_values: jaxls.VarValues,
-        var_T_world_root: jaxls.SE3Var,
-        var_robot_cfg: jaxls.Var[jnp.ndarray],
+        var_T: jaxls.SE3Var,
+        var_cfg: jaxls.Var[jnp.ndarray],
     ) -> jax.Array:
-        """Laplacian mesh deformation cost."""
-        robot_cfg = var_values[var_robot_cfg]
+        robot_cfg = var_values[var_cfg]
+        T_world_root = var_values[var_T]
+
         T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
-        T_world_root = var_values[var_T_world_root]
         T_world_link = T_world_root @ T_root_link
 
-        # Get link transforms for keypoint links
-        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[g1_link_indices])
-
-        # Apply local offsets: rotate by link orientation and add to position
-        # local_offsets: (N, 3), need to rotate each by corresponding link rotation
-        rotated_offsets = jax.vmap(lambda T, off: T.rotation() @ off)(
-            T_keypoint_links, local_offsets
-        )
+        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[..., g1_link_indices, :])
+        rotated_offsets = T_keypoint_links.rotation() @ local_offsets
         robot_keypoints = T_keypoint_links.translation() + rotated_offsets
 
-        # Combine with fixed object points
-        vertices = jnp.concatenate([robot_keypoints, object_points], axis=0)
-
-        # Compute current Laplacian
+        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
         current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
 
-        # Residual
-        return (current_lap - target_lap).flatten() * weights["laplacian"]
+        return ((current_lap - target_laplacian) * weights["laplacian"]).flatten()
 
+    # Smoothness to previous frame (if available)
     @jaxls.Cost.factory
     def smoothness_to_prev_joints(
         var_values: jaxls.VarValues,
-        var_robot_cfg: jaxls.Var[jnp.ndarray],
+        var_cfg: jaxls.Var[jnp.ndarray],
     ) -> jax.Array:
-        """Smoothness cost towards previous frame's joints."""
-        robot_cfg = var_values[var_robot_cfg]
-        return (robot_cfg - prev_joints) * weights["smoothness"]
-
-    prev_T_world_joints = prev_T_world_root @ jaxlie.SE3(
-        robot.forward_kinematics(prev_joints)
-    )
+        if prev_joints is None:
+            return jnp.zeros(1)
+        return (
+            (var_values[var_cfg] - prev_joints) * weights["joint_smoothness"]
+        ).flatten()
 
     @jaxls.Cost.factory
     def smoothness_to_prev_pose(
         var_values: jaxls.VarValues,
-        var_robot_cfg: jaxls.Var[jnp.ndarray],
-        var_T_world_root: jaxls.SE3Var,
+        var_T: jaxls.SE3Var,
     ) -> jax.Array:
-        """Smoothness cost towards previous frame's pose."""
-        T_world_root = var_values[var_T_world_root]
-        T_root_robot = jaxlie.SE3(robot.forward_kinematics(var_values[var_robot_cfg]))
-        T_world_robot = T_world_root @ T_root_robot
-        return (prev_T_world_joints.inverse() @ T_world_robot).log() * weights[
-            "smoothness"
-        ]
+        if prev_T_world_root is None:
+            return jnp.zeros(1)
+        return (
+            (var_values[var_T].inverse() @ prev_T_world_root).log()
+            * weights["pose_smoothness"]
+        ).flatten()
 
-    @jaxls.Cost.factory(kind="constraint_geq_zero")
-    def world_collision_constraint(
-        vals: jaxls.VarValues,
-        robot: pk.Robot,
-        robot_coll: pk.collision.RobotCollision,
-        joint_var: jaxls.Var[jax.Array],
-        var_T_world_root: jaxls.SE3Var,
-        world_geom: pk.collision.CollGeom,
-    ) -> jax.Array:
-        """Computes world collision violation residual. Residual is >0 if collision is detected."""
-        cfg = vals[joint_var]
-        world_geom_in_root = world_geom.transform(vals[var_T_world_root].inverse())
-        dist_matrix = robot_coll.compute_world_collision_distance(
-            robot, cfg, world_geom_in_root
-        )
-        return dist_matrix.flatten()
+    # World collision (soft cost for IK, not hard constraint)
+    def make_world_collision_cost(world_geom: pk.collision.CollGeom):
+        @jaxls.Cost.factory(kind="constraint_geq_zero")
+        def world_collision_cost(
+            vals: jaxls.VarValues,
+            joint_var: jaxls.Var[jax.Array],
+            var_T: jaxls.SE3Var,
+        ) -> jax.Array:
+            cfg = vals[joint_var]
+            T_world_root = vals[var_T]
+            world_geom_in_root = world_geom.transform(T_world_root.inverse())
+            dist = robot_coll.compute_world_collision_distance(
+                robot, cfg, world_geom_in_root
+            )
+            return dist.flatten()
 
+        return world_collision_cost
+
+    # Build costs
     costs: list[jaxls.Cost] = [
-        # Laplacian cost
-        laplacian_cost(var_T_world_root, var_joints),
-        # Smoothness to previous frame
+        laplacian_cost_single(var_T_world_root, var_joints),
         smoothness_to_prev_joints(var_joints),
-        smoothness_to_prev_pose(var_joints, var_T_world_root),
-        # Rest pose regularization (very small)
+        smoothness_to_prev_pose(var_T_world_root),
         pk.costs.rest_cost(
             var_joints,
-            var_joints.default_factory(),
+            var_joints.default_factory()[None],
             jnp.full(var_joints.default_factory().shape, weights["rest"]),
         ),
-        # Joint limits as constraint
         pk.costs.limit_constraint(
-            robot,
-            var_joints,
+            jax.tree.map(lambda x: x[None], robot),
+            robot.joint_var_cls(jnp.arange(1)),
         ),
-        # Collision avoidance constraint
         pk.costs.self_collision_cost(
-            robot, robot_coll, var_joints, margin=0.01, weight=10.0
+            jax.tree.map(lambda x: x[None], robot),
+            jax.tree.map(lambda x: x[None], robot_coll),
+            robot.joint_var_cls(jnp.arange(1)),
+            margin=0.01,
+            weight=weights["self_collision"],
         ),
     ]
 
-    # Collision avoidance with world objects
+    # World collision costs
     for world_coll in world_coll_list:
         costs.append(
-            world_collision_constraint(
-                robot, robot_coll, var_joints, var_T_world_root, world_coll
-            ),
+            make_world_collision_cost(world_coll)(var_joints, var_T_world_root)
+        )
+
+    # Initialize
+    if prev_joints is not None:
+        init_joint_cfg = prev_joints
+    else:
+        init_joint_cfg = robot.joint_var_cls.default_factory()
+
+    if prev_T_world_root is not None:
+        init_T = prev_T_world_root
+    else:
+        init_T = jaxlie.SE3.from_rotation_and_translation(
+            rotation=jaxlie.SO3.identity(),
+            translation=init_translation,
         )
 
     solution = (
@@ -394,14 +413,319 @@ def solve_single_frame(
             verbose=False,
             initial_vals=jaxls.VarValues.make(
                 [
-                    var_joints.with_value(init_joints),
-                    var_T_world_root.with_value(init_T_world_root),
+                    var_joints.with_value(init_joint_cfg),
+                    var_T_world_root.with_value(init_T),
                 ]
             ),
         )
     )
 
     return solution[var_T_world_root], solution[var_joints]
+
+
+def compute_warmstart_initialization(
+    robot: pk.Robot,
+    robot_coll: pk.collision.RobotCollision,
+    world_coll_list: list[pk.collision.CollGeom],
+    target_laplacians: jnp.ndarray,
+    object_points: jnp.ndarray,
+    g1_link_indices: jnp.ndarray,
+    local_offsets: jnp.ndarray,
+    adj_matrix: jnp.ndarray,
+    weights: ClimbingRetargetingWeights,
+    motion: jnp.ndarray,
+    mocap_indices: jnp.ndarray,
+    keyframe_interval: int = 50,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Compute warm-start initialization by solving IK for key frames.
+
+    Args:
+        keyframe_interval: Solve IK every N frames.
+
+    Returns:
+        Tuple of (init_Ts_wxyz_xyz, init_joints) arrays for all timesteps.
+    """
+    timesteps = target_laplacians.shape[0]
+
+    # Select key frame indices
+    keyframe_indices = list(range(0, timesteps, keyframe_interval))
+    if keyframe_indices[-1] != timesteps - 1:
+        keyframe_indices.append(timesteps - 1)
+
+    print(f"Solving IK for {len(keyframe_indices)} key frames...", flush=True)
+
+    # Compute mocap centroids for initialization
+    keypoint_positions = motion[:, mocap_indices]
+    centroids = keypoint_positions.mean(axis=1)
+
+    # Solve key frames sequentially
+    keyframe_Ts: list[jaxlie.SE3] = []
+    keyframe_joints: list[jnp.ndarray] = []
+    prev_T: jaxlie.SE3 | None = None
+    prev_joints: jnp.ndarray | None = None
+
+    for i, idx in enumerate(keyframe_indices):
+        T, joints = solve_single_frame_ik(
+            robot=robot,
+            robot_coll=robot_coll,
+            world_coll_list=world_coll_list,
+            target_laplacian=target_laplacians[idx],
+            object_points=object_points,
+            g1_link_indices=g1_link_indices,
+            local_offsets=local_offsets,
+            adj_matrix=adj_matrix,
+            weights=weights,
+            init_translation=centroids[idx],
+            prev_T_world_root=prev_T,
+            prev_joints=prev_joints,
+        )
+        keyframe_Ts.append(T)
+        keyframe_joints.append(joints)
+        prev_T = T
+        prev_joints = joints
+
+        if (i + 1) % 5 == 0 or i == len(keyframe_indices) - 1:
+            print(f"  Solved {i + 1}/{len(keyframe_indices)} key frames", flush=True)
+
+    # Interpolate between key frames
+    init_joints = onp.zeros((timesteps, robot.joint_var_cls.default_factory().shape[0]))
+    init_Ts_wxyz_xyz = onp.zeros((timesteps, 7))
+
+    for i in range(len(keyframe_indices) - 1):
+        start_idx = keyframe_indices[i]
+        end_idx = keyframe_indices[i + 1]
+        num_interp = end_idx - start_idx
+
+        # Interpolate joints (linear)
+        start_joints = onp.array(keyframe_joints[i])
+        end_joints = onp.array(keyframe_joints[i + 1])
+        for j in range(num_interp + 1):
+            t = j / num_interp if num_interp > 0 else 0.0
+            init_joints[start_idx + j] = (1 - t) * start_joints + t * end_joints
+
+        # Interpolate SE3 (slerp for rotation, lerp for translation)
+        start_T = keyframe_Ts[i]
+        end_T = keyframe_Ts[i + 1]
+        start_trans = onp.array(start_T.translation())
+        end_trans = onp.array(end_T.translation())
+        start_wxyz = onp.array(start_T.rotation().wxyz)
+        end_wxyz = onp.array(end_T.rotation().wxyz)
+
+        for j in range(num_interp + 1):
+            t = j / num_interp if num_interp > 0 else 0.0
+            # Lerp translation
+            trans = (1 - t) * start_trans + t * end_trans
+            # Slerp rotation (simple linear interp of quaternion + normalize)
+            wxyz = (1 - t) * start_wxyz + t * end_wxyz
+            wxyz = wxyz / onp.linalg.norm(wxyz)
+            init_Ts_wxyz_xyz[start_idx + j] = onp.concatenate([wxyz, trans])
+
+    print("Warm-start initialization complete!", flush=True)
+    return jnp.array(init_Ts_wxyz_xyz), jnp.array(init_joints)
+
+
+@jdc.jit
+def solve_trajectory(
+    robot: pk.Robot,
+    robot_coll: pk.collision.RobotCollision,
+    world_coll_list: list[pk.collision.CollGeom],
+    target_laplacians: jnp.ndarray,
+    object_points: jnp.ndarray,
+    g1_link_indices: jnp.ndarray,
+    local_offsets: jnp.ndarray,
+    adj_matrix: jnp.ndarray,
+    weights: ClimbingRetargetingWeights,
+    init_Ts_wxyz_xyz: jnp.ndarray,
+    init_joints: jnp.ndarray,
+) -> tuple[jaxlie.SE3, jnp.ndarray]:
+    """Solve trajectory optimization for climbing retargeting.
+
+    All timesteps are optimized simultaneously (not sequentially).
+
+    Args:
+        robot: PyRoki robot model.
+        robot_coll: Robot collision model.
+        world_coll_list: List of world collision geometries.
+        target_laplacians: (T, n_total, 3) target Laplacian coordinates for all frames.
+        object_points: (num_obj_points, 3) sampled object surface points.
+        g1_link_indices: Corresponding G1 robot link indices.
+        local_offsets: (N, 3) local-frame offsets for each keypoint.
+        adj_matrix: (n_total, n_total) precomputed adjacency matrix.
+        weights: Retargeting weights.
+        init_Ts_wxyz_xyz: (T, 7) warm-start root transforms.
+        init_joints: (T, num_joints) warm-start joint configurations.
+
+    Returns:
+        Tuple of (Ts_world_root, joints) for all frames.
+        - Ts_world_root: SE3 with batch shape (T,)
+        - joints: (T, num_joints) array
+    """
+    timesteps = target_laplacians.shape[0]
+
+    # Trajectory variables for all timesteps
+    var_joints = robot.joint_var_cls(jnp.arange(timesteps))
+    var_Ts_world_root = jaxls.SE3Var(jnp.arange(timesteps))
+
+    # Batch robot for trajectory (required by pk.costs functions)
+    robot_batched = jax.tree.map(lambda x: x[None], robot)
+    robot_coll_batched = jax.tree.map(lambda x: x[None], robot_coll)
+
+    # Cost: Laplacian mesh deformation for all timesteps
+    @jaxls.Cost.factory
+    def laplacian_cost(
+        var_values: jaxls.VarValues,
+        var_Ts_world_root: jaxls.SE3Var,
+        var_robot_cfg: jaxls.Var[jnp.ndarray],
+        target_laplacian: jnp.ndarray,
+    ) -> jax.Array:
+        """Laplacian mesh deformation cost for all timesteps."""
+        robot_cfg = var_values[var_robot_cfg]
+        T_world_root = var_values[var_Ts_world_root]
+
+        T_root_link = jaxlie.SE3(robot.forward_kinematics(cfg=robot_cfg))
+        T_world_link = T_world_root @ T_root_link
+
+        T_keypoint_links = jaxlie.SE3(T_world_link.wxyz_xyz[..., g1_link_indices, :])
+        rotated_offsets = T_keypoint_links.rotation() @ local_offsets
+        robot_keypoints = T_keypoint_links.translation() + rotated_offsets
+
+        vertices = jnp.concatenate([robot_keypoints, object_points], axis=-2)
+        current_lap = calculate_laplacian_coordinates_vectorized(vertices, adj_matrix)
+
+        return ((current_lap - target_laplacian) * weights["laplacian"]).flatten()
+
+    # Cost: Joint smoothness between adjacent timesteps
+    @jaxls.Cost.factory
+    def smoothness_to_prev_joints(
+        var_values: jaxls.VarValues,
+        var_curr: jaxls.Var[jnp.ndarray],
+        var_prev: jaxls.Var[jnp.ndarray],
+    ) -> jax.Array:
+        """Smoothness cost for joint configurations between adjacent timesteps."""
+        return (
+            (var_values[var_curr] - var_values[var_prev]) * weights["joint_smoothness"]
+        ).flatten()
+
+    # Cost: Root transform smoothness (SE3 log distance)
+    @jaxls.Cost.factory
+    def smoothness_to_prev_pose(
+        var_values: jaxls.VarValues,
+        var_curr: jaxls.Var[jnp.ndarray],
+        var_prev: jaxls.Var[jnp.ndarray],
+        var_T_curr: jaxls.SE3Var,
+        var_T_prev: jaxls.SE3Var,
+    ) -> jax.Array:
+        """Smoothness cost for root pose trajectory."""
+        T_world_joints = var_values[var_T_curr] @ jaxlie.SE3(
+            robot.forward_kinematics(cfg=var_values[var_curr])
+        )
+        prev_T_world_joints = var_values[var_T_prev] @ jaxlie.SE3(
+            robot.forward_kinematics(cfg=var_values[var_prev])
+        )
+        return (
+            (prev_T_world_joints.inverse() @ T_world_joints).log()
+            * weights["pose_smoothness"]
+        ).flatten()
+
+    # Factory for world collision cost (uses closure to capture world_geom)
+    def make_world_collision_cost(world_geom: pk.collision.CollGeom):
+        """Create a soft world collision cost for the given geometry."""
+
+        @jaxls.Cost.factory
+        def world_collision_cost(
+            vals: jaxls.VarValues,
+            joint_var: jaxls.Var[jax.Array],
+            var_Ts_world_root: jaxls.SE3Var,
+        ) -> jax.Array:
+            """World collision cost - soft penalty, handles both batched and unbatched."""
+            cfg = vals[joint_var]
+            Ts_world_root = vals[var_Ts_world_root]
+
+            # Check if we have a batch dimension
+            is_batched = cfg.ndim > 1
+
+            def compute_dist_single(cfg_single, T_world_root_single):
+                world_geom_in_root = world_geom.transform(T_world_root_single.inverse())
+                return robot_coll.compute_world_collision_distance(
+                    robot, cfg_single, world_geom_in_root
+                )
+
+            if is_batched:
+                # Batched: vmap over first dimension
+                dist = jax.vmap(compute_dist_single)(cfg, Ts_world_root)
+            else:
+                # Unbatched: direct computation
+                dist = compute_dist_single(cfg, Ts_world_root)
+
+            # Soft penalty: penalize when dist < margin
+            margin = 0.02
+            penalty = jnp.maximum(margin - dist, 0.0) * 50.0
+            return penalty.flatten()
+
+        return world_collision_cost
+
+    # Build cost list
+    costs: list[jaxls.Cost] = [
+        # Laplacian cost for all timesteps
+        laplacian_cost(var_Ts_world_root, var_joints, target_laplacians),
+        # Joint smoothness between adjacent timesteps
+        smoothness_to_prev_joints(
+            robot.joint_var_cls(jnp.arange(1, timesteps)),
+            robot.joint_var_cls(jnp.arange(0, timesteps - 1)),
+        ),
+        # Root pose smoothness between adjacent timesteps
+        smoothness_to_prev_pose(
+            robot.joint_var_cls(jnp.arange(1, timesteps)),
+            robot.joint_var_cls(jnp.arange(0, timesteps - 1)),
+            jaxls.SE3Var(jnp.arange(1, timesteps)),
+            jaxls.SE3Var(jnp.arange(0, timesteps - 1)),
+        ),
+        # Rest pose regularization
+        pk.costs.rest_cost(
+            var_joints,
+            var_joints.default_factory()[None],
+            jnp.full((1,) + var_joints.default_factory().shape, weights["rest"]),
+        ),
+        # Joint limits constraint
+        pk.costs.limit_constraint(robot_batched, var_joints),
+        # Self-collision cost
+        pk.costs.self_collision_cost(
+            robot_batched,
+            robot_coll_batched,
+            var_joints,
+            margin=0.01,
+            weight=weights["self_collision"],
+        ),
+    ]
+
+    # World collision costs
+    for world_coll in world_coll_list:
+        costs.append(
+            make_world_collision_cost(world_coll)(var_joints, var_Ts_world_root)
+        )
+
+    # Use provided warm-start initialization
+    init_Ts = jaxlie.SE3(init_Ts_wxyz_xyz)
+
+    # Solve
+    solution = (
+        jaxls.LeastSquaresProblem(
+            costs=costs,
+            variables=[var_joints, var_Ts_world_root],
+        )
+        .analyze()
+        .solve(
+            verbose=True,
+            initial_vals=jaxls.VarValues.make(
+                [
+                    var_joints.with_value(init_joints),
+                    var_Ts_world_root.with_value(init_Ts),
+                ]
+            ),
+        )
+    )
+
+    return solution[var_Ts_world_root], solution[var_joints]
 
 
 if __name__ == "__main__":
