@@ -149,7 +149,9 @@ def main():
         point=jnp.array([0.0, 0.0, 0.0]),
         normal=jnp.array([0.0, 0.0, 1.0]),
     )
-    server.scene.add_mesh_trimesh("/box_coll_pk", coll_box.to_trimesh())
+    server.scene.add_mesh_trimesh(
+        "/box_coll_pk", coll_box.to_trimesh(), receive_shadow=0.1
+    )
 
     # Add ground plane
     server.scene.add_grid("/grid", width=4, height=4, position=(0.0, 0.0, 0.0))
@@ -421,7 +423,8 @@ def make_world_collision_constraint(
         dist = robot_coll.compute_world_collision_distance(
             robot, cfg, world_geom_in_root
         )
-        return dist.flatten()
+        margin = 0.02
+        return dist.flatten() - margin
 
     return world_collision_constraint
 
@@ -430,7 +433,7 @@ def make_world_collision_penalty(
     robot: pk.Robot,
     robot_coll: pk.collision.RobotCollision,
     world_geom: pk.collision.CollGeom,
-    margin: float = 0.00,
+    margin: float = 0.02,
     penalty_weight: float = 50.0,
 ):
     """Factory for world collision penalty (soft cost for trajectory optimization).
@@ -894,7 +897,7 @@ def solve_trajectory(
 
     # World collision costs (soft penalty for trajectory optimization)
     for world_coll in world_coll_list:
-        world_coll_cost = make_world_collision_penalty(robot, robot_coll, world_coll)
+        world_coll_cost = make_world_collision_constraint(robot, robot_coll, world_coll)
         costs.append(world_coll_cost(var_joints, var_Ts_world_root, var_scale))
 
     # Use provided warm-start initialization
