@@ -348,3 +348,103 @@ def limit_jerk_residual(
     )
     residual = jnp.maximum(0.0, jnp.abs(jerk) - jerk_limit)
     return (residual * weight).flatten()
+
+
+# --- Loop Closure Residuals ---
+
+
+def loop_closure_residual(
+    vals: VarValues,
+    robot: Robot,
+    joint_var: Var[Array],
+    link_a_index: Array,
+    link_b_index: Array,
+    T_a_b: jaxlie.SE3,
+    pos_weight: Array | float = 1.0,
+    ori_weight: Array | float = 1.0,
+) -> Array:
+    """Computes the residual for enforcing loop closure between two links.
+
+    This residual function penalizes deviations from the expected relative transform
+    between two links in the kinematic chain. It can be used to model closed-loop
+    mechanisms like 4-bar linkages, parallel robots, or Stewart platforms.
+
+    The residual is computed as the SE(3) logarithm of the error between the
+    actual and expected relative transforms:
+        error = (T_world_a.inverse() @ T_world_b @ T_a_b.inverse()).log()
+
+    Args:
+        vals: The optimization variable values.
+        robot: The robot model.
+        joint_var: The joint configuration variable.
+        link_a_index: Index of the first link (int32 array).
+        link_b_index: Index of the second link (int32 array).
+        T_a_b: The expected SE(3) transform from link A to link B.
+        pos_weight: Weight for positional error (translation components).
+        ori_weight: Weight for orientation error (rotation components).
+
+    Returns:
+        Flattened residual array (6 elements: 3 position + 3 orientation).
+    """
+    assert link_a_index.dtype == jnp.int32
+    assert link_b_index.dtype == jnp.int32
+
+    joint_cfg = vals[joint_var]
+    Ts_world_link = robot.forward_kinematics(joint_cfg)
+
+    T_world_a = jaxlie.SE3(Ts_world_link[..., link_a_index, :])
+    T_world_b = jaxlie.SE3(Ts_world_link[..., link_b_index, :])
+
+    # Compute actual relative transform from A to B
+    T_a_b_actual = T_world_a.inverse() @ T_world_b
+
+    # Compute error: how far is actual from expected
+    error = (T_a_b_actual @ T_a_b.inverse()).log()
+
+    pos_residual = error[..., :3] * pos_weight
+    ori_residual = error[..., 3:] * ori_weight
+
+    return jnp.concatenate([pos_residual, ori_residual]).flatten()
+
+
+def loop_closure_residual_unweighted(
+    vals: VarValues,
+    robot: Robot,
+    joint_var: Var[Array],
+    link_a_index: Array,
+    link_b_index: Array,
+    T_a_b: jaxlie.SE3,
+) -> Array:
+    """Computes the residual for enforcing exact loop closure between two links.
+
+    This is an unweighted version of loop_closure_residual, suitable for use
+    as a hard equality constraint (Augmented Lagrangian). Use this when the
+    loop closure must be satisfied exactly rather than just minimized.
+
+    Args:
+        vals: The optimization variable values.
+        robot: The robot model.
+        joint_var: The joint configuration variable.
+        link_a_index: Index of the first link (int32 array).
+        link_b_index: Index of the second link (int32 array).
+        T_a_b: The expected SE(3) transform from link A to link B.
+
+    Returns:
+        Flattened residual array (6 elements: 3 position + 3 orientation).
+    """
+    assert link_a_index.dtype == jnp.int32
+    assert link_b_index.dtype == jnp.int32
+
+    joint_cfg = vals[joint_var]
+    Ts_world_link = robot.forward_kinematics(joint_cfg)
+
+    T_world_a = jaxlie.SE3(Ts_world_link[..., link_a_index, :])
+    T_world_b = jaxlie.SE3(Ts_world_link[..., link_b_index, :])
+
+    # Compute actual relative transform from A to B
+    T_a_b_actual = T_world_a.inverse() @ T_world_b
+
+    # Compute error: how far is actual from expected
+    error = (T_a_b_actual @ T_a_b.inverse()).log()
+
+    return error.flatten()

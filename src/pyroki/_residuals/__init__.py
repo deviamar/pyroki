@@ -30,3 +30,7 @@ from ._residuals import rest_with_base_residual as rest_with_base_residual
 from ._residuals import self_collision_residual as self_collision_residual
 from ._residuals import smoothness_residual as smoothness_residual
 from ._residuals import world_collision_residual as world_collision_residual
+from ._residuals import loop_closure_residual as loop_closure_residual
+from ._residuals import (
+    loop_closure_residual_unweighted as loop_closure_residual_unweighted,
+)

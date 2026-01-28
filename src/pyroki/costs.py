@@ -14,6 +14,8 @@ from ._residuals import (
     five_point_velocity_residual,
     limit_residual,
     limit_velocity_residual,
+    loop_closure_residual,
+    loop_closure_residual_unweighted,
     manipulability_residual,
     pose_residual,
     pose_with_base_residual,
@@ -55,6 +57,9 @@ five_point_velocity_cost = Cost.factory(five_point_velocity_residual)
 five_point_acceleration_cost = Cost.factory(five_point_acceleration_residual)
 five_point_jerk_cost = Cost.factory(five_point_jerk_residual)
 
+# Loop closure costs
+loop_closure_cost = Cost.factory(loop_closure_residual)
+
 # Constraint factories (augmented Lagrangian penalties)
 # These use kind="constraint_leq_zero" which enforces residual <= 0
 limit_constraint = Cost.factory(kind="constraint_leq_zero")(limit_residual)
@@ -63,4 +68,9 @@ limit_velocity_constraint = Cost.factory(kind="constraint_leq_zero")(
 )
 world_collision_constraint = Cost.factory(kind="constraint_leq_zero")(
     world_collision_residual
+)
+
+# Equality constraint for exact loop closure
+loop_closure_constraint = Cost.factory(kind="constraint_eq_zero")(
+    loop_closure_residual_unweighted
 )
