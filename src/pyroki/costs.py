@@ -23,6 +23,7 @@ from ._residuals import (
     rest_with_base_residual,
     self_collision_residual,
     smoothness_residual,
+    stewart_closure_residual,
     world_collision_residual,
 )
 from ._residuals._pose_residual_analytic_jac import (
@@ -59,6 +60,7 @@ five_point_jerk_cost = Cost.factory(five_point_jerk_residual)
 
 # Loop closure costs
 loop_closure_cost = Cost.factory(loop_closure_residual)
+stewart_closure_cost = Cost.factory(stewart_closure_residual)
 
 # Constraint factories (augmented Lagrangian penalties)
 # These use kind="constraint_leq_zero" which enforces residual <= 0

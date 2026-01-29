@@ -34,3 +34,4 @@ from ._residuals import loop_closure_residual as loop_closure_residual
 from ._residuals import (
     loop_closure_residual_unweighted as loop_closure_residual_unweighted,
 )
+from ._residuals import stewart_closure_residual as stewart_closure_residual

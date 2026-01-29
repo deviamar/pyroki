@@ -448,3 +448,59 @@ def loop_closure_residual_unweighted(
     error = (T_a_b_actual @ T_a_b.inverse()).log()
 
     return error.flatten()
+
+
+def stewart_closure_residual(
+    vals: VarValues,
+    robot: Robot,
+    joint_var: Var[Array],
+    platform_var: Var[jaxlie.SE3],
+    tip_link_indices: Array,
+    T_platform_tips: jaxlie.SE3,
+    weight: Array | float = 1.0,
+) -> Array:
+    """Computes position-only closure residual for parallel manipulator legs.
+
+    This residual function enforces that each leg tip (from forward kinematics)
+    matches its expected attachment point on the moving platform. It is designed
+    for Stewart platforms and similar parallel manipulators where multiple legs
+    connect a fixed base to a moving platform.
+
+    The residual only considers position (not orientation), as the spherical
+    joints at the leg tips allow arbitrary orientation.
+
+    Args:
+        vals: The optimization variable values.
+        robot: The robot model.
+        joint_var: The joint configuration variable.
+        platform_var: The SE3 variable representing the platform pose in world frame.
+        tip_link_indices: Indices of the leg tip links (int32 array, shape (n_legs,)).
+        T_platform_tips: SE3 transforms from platform frame to each tip attachment
+            point (batched, shape (n_legs,)).
+        weight: Weight for position error. Can be scalar or per-leg array.
+
+    Returns:
+        Flattened residual array (3 * n_legs elements for position errors).
+    """
+    assert tip_link_indices.dtype == jnp.int32
+
+    joint_cfg = vals[joint_var]
+    T_world_platform = vals[platform_var]
+    Ts_world_link = robot.forward_kinematics(joint_cfg)
+
+    # Compute position errors for each leg
+    def compute_leg_error(tip_idx: Array, T_platform_tip: jaxlie.SE3) -> Array:
+        # Actual tip position from FK
+        T_world_tip = jaxlie.SE3(Ts_world_link[..., tip_idx, :])
+        tip_pos_actual = T_world_tip.translation()
+
+        # Expected tip position from platform pose
+        T_world_target = T_world_platform @ T_platform_tip
+        tip_pos_expected = T_world_target.translation()
+
+        return (tip_pos_actual - tip_pos_expected) * weight
+
+    # Vmap over all legs
+    pos_errors = jax.vmap(compute_leg_error)(tip_link_indices, T_platform_tips)
+
+    return pos_errors.flatten()
