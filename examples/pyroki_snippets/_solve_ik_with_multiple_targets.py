@@ -14,10 +14,12 @@ import pyroki as pk
 
 
 def solve_ik_with_multiple_targets(
-    robot: pk.Robot,
-    target_link_names: Sequence[str],
-    target_wxyzs: onp.ndarray,
-    target_positions: onp.ndarray,
+    robot,
+    target_link_names,
+    target_wxyzs,
+    target_positions,
+    q_prev=None,
+    smoothness_weight=0.0,
 ) -> onp.ndarray:
     """
     Solves the basic IK problem for a robot.
@@ -41,6 +43,8 @@ def solve_ik_with_multiple_targets(
         jnp.array(target_wxyzs),
         jnp.array(target_positions),
         jnp.array(target_link_indices),
+        None if q_prev is None else jnp.array(q_prev),
+        smoothness_weight,
     )
     assert cfg.shape == (robot.joints.num_actuated_joints,)
 
@@ -49,10 +53,12 @@ def solve_ik_with_multiple_targets(
 
 @jdc.jit
 def _solve_ik_jax(
-    robot: pk.Robot,
-    target_wxyz: jax.Array,
-    target_position: jax.Array,
-    target_joint_indices: jax.Array,
+    robot,
+    target_wxyz,
+    target_position,
+    target_joint_indices,
+    q_prev,
+    smoothness_weight,
 ) -> jax.Array:
     JointVar = robot.joint_var_cls
 
@@ -84,6 +90,15 @@ def _solve_ik_jax(
             JointVar(0),
         ),
     )
+
+    costs.append(
+        pk.costs.rest_cost(
+            JointVar(0),
+            rest_pose=q_prev,
+            weight=smoothness_weight,
+        )
+    )
+
     sol = (
         jaxls.LeastSquaresProblem(costs=costs, variables=[JointVar(0)])
         .analyze()
