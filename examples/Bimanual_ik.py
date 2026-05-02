@@ -13,42 +13,99 @@ import pyroki as pk
 from viser.extras import ViserUrdf
 import pyroki_snippets as pks
 
+v_max = 2
+    
 
 def main():
     urdf = URDF.load("/home/devi/giava/giava.urdf")
-    target_link_names = ["leftgripper_base", "rightgripper_base"]
+    target_link_names = [
+        "leftgripper_base",
+        "rightgripper_base",
+        "middlecamera_cover"
+    ]
 
     robot = pk.Robot.from_urdf(urdf)
+
+    print(robot.joints.names)
+
+    '''
+    ('base_leftbase_link_fixed', 'leftwaist', 'leftshoulder', 'leftelbow', 'leftforearm_roll', 'leftwrist_angle', 
+    'leftwrist_rotate', 'leftgripper_link_leftgripper_base_fixed', 'leftleft_finger', 'leftright_finger', 
+    'base_rightbase_link_fixed', 'rightwaist', 'rightshoulder', 'rightelbow', 'rightforearm_roll', 'rightwrist_angle', 
+    'rightwrist_rotate', 'rightgripper_link_rightgripper_base_fixed', 'rightleft_finger', 'rightright_finger', 
+    'middlebase_link', 'middleshoulder_link', 'middleupper_arm_link', 'middleupper_forearm_link', 
+    'middlelower_forearm_link', 'middlewrist_link', 'middlepan_link', 'base_middlebase_link_fixed', 
+    'middlecamera_body_fixed', 'middlecamera_cover_fixed')
+    '''
 
     server = viser.ViserServer()
     server.scene.add_grid("/ground", width=2, height=2)
     urdf_vis = ViserUrdf(server, urdf, root_node_name="/base")
 
     ik_target_0 = server.scene.add_transform_controls(
-        "/ik_target_0", scale=0.2, position=(0.41, -0.3, 0.56), wxyz=(0, 0, 1, 0)
+        "/ik_target_0", scale=0.2, position=(0.41, -0.3, 0.56), wxyz=(1, 0, 0, 0)
     )
     ik_target_1 = server.scene.add_transform_controls(
-        "/ik_target_1", scale=0.2, position=(0.41, 0.3, 0.56), wxyz=(0, 0, 1, 0)
+        "/ik_target_1", scale=0.2, position=(0.41, 0.3, 0.56), wxyz=(1, 0, 0, 0)
+    )
+    ik_target_2 = server.scene.add_transform_controls(
+        "/ik_target_2", scale=0.2, position=(0.41, 0.3, 0.56), wxyz=(1, 0, 0, 0)
     )
 
     timing_handle = server.gui.add_number("Elapsed (ms)", 0.001, disabled=True)
 
     q = np.zeros(robot.joints.num_actuated_joints)
 
+    # # --- GUI button ---
+    # save_button = server.gui.add_button("Save Current Pose")
+
+    # @save_button.on_click
+    # def _(_event):
+    #     saved_q["value"] = q.copy()
+    #     print("Saved q:", saved_q["value"])
+
+
+    q_rest = np.zeros_like(q)  # or better: a natural pose
+
+    q = np.array([
+        0.2, 0.2, 0.2,  0.2, 0.2, 0.2, 0.2,
+        0.2, 0.2, 0.2,  0.2, 0.2, 0.2, 0.2,
+        0.2, 0.2, 0.2,  0.2, 1.2, 0.2, 0.2,  0.2,  0.2])
+
     while True:
         start_time = time.time()
 
-        target_wxyzs = np.array([ik_target_0.wxyz, ik_target_1.wxyz])
-        target_positions = np.array([ik_target_0.position, ik_target_1.position])
+        target_wxyzs = np.array([
+            ik_target_0.wxyz,
+            ik_target_1.wxyz,
+            ik_target_2.wxyz
+        ])
 
-        q = pks.solve_ik_with_multiple_targets(
+        target_positions = np.array([
+            ik_target_0.position,
+            ik_target_1.position,
+            ik_target_2.position
+        ])
+
+        q_prev = q.copy()
+
+        q_new = pks.solve_ik_with_multiple_targets(
             robot,
             target_link_names,
             target_wxyzs,
             target_positions,
             q_prev=q,
             smoothness_weight=0.1,
+            rest_weight=0.05,        # 👈 add this if supported
+            q_rest=q_rest
         )
+
+        dt = time.time() - start_time
+
+        if q_new is not None:
+            dq = q_new - q_prev
+            dq = np.clip(dq, -v_max * dt, v_max * dt)
+            q = q_prev + dq
 
         if q is None:
             q = np.zeros(robot.joints.num_actuated_joints)
@@ -57,7 +114,6 @@ def main():
         timing_handle.value = 0.99 * timing_handle.value + 0.01 * (elapsed_time * 1000)
 
         urdf_vis.update_cfg(q)
-
 
 if __name__ == "__main__":
     main()

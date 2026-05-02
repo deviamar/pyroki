@@ -20,6 +20,8 @@ def solve_ik_with_multiple_targets(
     target_positions,
     q_prev=None,
     smoothness_weight=0.0,
+    q_rest=None,
+    rest_weight=0.0,
 ) -> onp.ndarray:
     """
     Solves the basic IK problem for a robot.
@@ -45,6 +47,8 @@ def solve_ik_with_multiple_targets(
         jnp.array(target_link_indices),
         None if q_prev is None else jnp.array(q_prev),
         smoothness_weight,
+        None if q_rest is None else jnp.array(q_rest),
+        rest_weight,
     )
     assert cfg.shape == (robot.joints.num_actuated_joints,)
 
@@ -59,6 +63,8 @@ def _solve_ik_jax(
     target_joint_indices,
     q_prev,
     smoothness_weight,
+    q_rest,
+    rest_weight,
 ) -> jax.Array:
     JointVar = robot.joint_var_cls
 
@@ -78,26 +84,35 @@ def _solve_ik_jax(
             pos_weight=50.0,
             ori_weight=10.0,
         ),
-        pk.costs.rest_cost(
-            JointVar(0),
-            rest_pose=JointVar.default_factory(),
-            weight=1.0,
-        ),
     ]
+
+    # --- Rest posture ---
+    if q_rest is not None:
+        costs.append(
+            pk.costs.rest_cost(
+                JointVar(0),
+                rest_pose=q_rest,
+                weight=rest_weight,
+            )
+        )
+
+    # --- Joint limits ---
     costs.append(
         pk.costs.limit_constraint(
             robot,
             JointVar(0),
-        ),
-    )
-
-    costs.append(
-        pk.costs.rest_cost(
-            JointVar(0),
-            rest_pose=q_prev,
-            weight=smoothness_weight,
         )
     )
+
+    # --- Smoothness ---
+    if q_prev is not None:
+        costs.append(
+            pk.costs.rest_cost(
+                JointVar(0),
+                rest_pose=q_prev,
+                weight=smoothness_weight,
+            )
+        )
 
     sol = (
         jaxls.LeastSquaresProblem(costs=costs, variables=[JointVar(0)])
