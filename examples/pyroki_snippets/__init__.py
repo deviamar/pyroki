@@ -10,3 +10,5 @@ from ._solve_ik_with_multiple_targets import (
     solve_ik_with_multiple_targets as solve_ik_with_multiple_targets,
 )
 from ._jparse import jparse_step as jparse_step
+from ._solve_trajectory_ik import solve_trajectory_ik
+from ._solve_trajectories_ik import solve_trajectories_ik

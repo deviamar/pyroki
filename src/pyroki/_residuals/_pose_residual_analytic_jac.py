@@ -81,7 +81,7 @@ def pose_cost_analytic_jac(
     target_link_index: jax.Array,
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
-    joint_mask: jax.Array | float = 1.0,
+    #joint_mask: jax.Array | float = 1.0,
 ) -> jaxls.Cost:
     """Create a pose cost with analytic Jacobian computation.
 
@@ -148,7 +148,7 @@ def pose_cost_analytic_jac(
         pos_weight,
         ori_weight,
         joints_applied_to_target,
-        joint_mask,
+        #joint_mask,
     )
 
 
@@ -164,7 +164,7 @@ def _pose_cost_jac(
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
     joints_applied_to_target: jax.Array,
-    joint_mask: jax.Array | float,
+    #joint_mask: jax.Array | float,
 ) -> jax.Array:
     """Jacobian for pose cost with analytic computation."""
     del vals, joint_var, target_pose  # Unused!
@@ -222,7 +222,7 @@ def _pose_cost_jac(
     )
 
     # Apply joint mask: zero out Jacobian columns for locked joints.
-    jac = jac * joint_mask
+    #jac = jac * joint_mask
 
     # Apply weights
     weights = jnp.array([pos_weight] * 3 + [ori_weight] * 3)
@@ -239,10 +239,10 @@ def _pose_cost_analytical_jac(
     pos_weight: jax.Array | float,
     ori_weight: jax.Array | float,
     joints_applied_to_target: jax.Array,
-    joint_mask: jax.Array | float,
+    #joint_mask: jax.Array | float,
 ) -> tuple[jax.Array, _PoseCostJacCache]:
     """Computes the residual for matching link poses to target poses."""
-    del joints_applied_to_target, joint_mask  # Only used in Jacobian
+    del joints_applied_to_target #, joint_mask  # Only used in Jacobian
     assert target_link_index.dtype == jnp.int32
     joint_cfg = vals[joint_var]
 
